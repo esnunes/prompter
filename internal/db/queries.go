@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -158,6 +159,53 @@ func (q *Queries) UpdatePromptRequestIssue(id int64, issueNumber int, issueURL s
 
 func (q *Queries) DeletePromptRequest(id int64) error {
 	return q.UpdatePromptRequestStatus(id, "deleted")
+}
+
+// GetLatestGeneratedPrompt finds the most recent generated_prompt from assistant messages
+func (q *Queries) GetLatestGeneratedPrompt(promptRequestID int64) (string, error) {
+	rows, err := q.db.Query(
+		`SELECT raw_response FROM messages
+		 WHERE prompt_request_id = ? AND role = 'assistant' AND raw_response IS NOT NULL
+		 ORDER BY created_at DESC`, promptRequestID,
+	)
+	if err != nil {
+		return "", fmt.Errorf("querying messages: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			continue
+		}
+		if prompt := extractGeneratedPrompt(raw); prompt != "" {
+			return prompt, nil
+		}
+	}
+	return "", fmt.Errorf("no generated prompt found")
+}
+
+func extractGeneratedPrompt(rawJSON string) string {
+	// Try parsing directly
+	type resp struct {
+		GeneratedPrompt string `json:"generated_prompt"`
+	}
+	var r resp
+	if err := json.Unmarshal([]byte(rawJSON), &r); err == nil && r.GeneratedPrompt != "" {
+		return r.GeneratedPrompt
+	}
+
+	// Try wrapper format
+	var wrapper struct {
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &wrapper); err == nil && wrapper.Result != "" {
+		if err := json.Unmarshal([]byte(wrapper.Result), &r); err == nil && r.GeneratedPrompt != "" {
+			return r.GeneratedPrompt
+		}
+	}
+
+	return ""
 }
 
 // Messages

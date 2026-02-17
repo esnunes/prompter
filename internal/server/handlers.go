@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/esnunes/prompter/internal/claude"
+	"github.com/esnunes/prompter/internal/github"
 	"github.com/esnunes/prompter/internal/models"
 
 	"github.com/google/uuid"
@@ -251,9 +252,64 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	s.renderFragment(w, "message_fragment.html", fragment)
 }
 
-// handlePublish is a stub — will be implemented in Phase 4 (GitHub integration)
 func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "Not implemented yet", http.StatusNotImplemented)
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	pr, err := s.queries.GetPromptRequest(id)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	// Get the generated prompt
+	prompt, err := s.queries.GetLatestGeneratedPrompt(id)
+	if err != nil {
+		log.Printf("getting generated prompt: %v", err)
+		http.Error(w, "No generated prompt found. Continue the conversation until the AI generates a prompt.", http.StatusBadRequest)
+		return
+	}
+
+	title := pr.Title
+	if title == "" {
+		title = "Prompt Request"
+	}
+
+	if pr.IssueNumber != nil {
+		// Update existing issue
+		if err := github.EditIssue(r.Context(), pr.RepoURL, *pr.IssueNumber, prompt); err != nil {
+			log.Printf("editing issue: %v", err)
+			http.Error(w, fmt.Sprintf("Failed to update GitHub issue: %v", err), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Create new issue
+		issue, err := github.CreateIssue(r.Context(), pr.RepoURL, title, prompt)
+		if err != nil {
+			log.Printf("creating issue: %v", err)
+			http.Error(w, fmt.Sprintf("Failed to create GitHub issue: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if err := s.queries.UpdatePromptRequestIssue(id, issue.Number, issue.URL); err != nil {
+			log.Printf("updating issue info: %v", err)
+		}
+	}
+
+	// Create revision
+	if _, err := s.queries.CreateRevision(id, prompt); err != nil {
+		log.Printf("creating revision: %v", err)
+	}
+
+	// Update status to published
+	if err := s.queries.UpdatePromptRequestStatus(id, "published"); err != nil {
+		log.Printf("updating status: %v", err)
+	}
+
+	// Redirect to the published view
+	http.Redirect(w, r, fmt.Sprintf("/prompt-requests/%d", id), http.StatusSeeOther)
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
