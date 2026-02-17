@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -100,6 +101,12 @@ func SendMessage(ctx context.Context, sessionID, repoDir, userMessage string) (*
 	)
 	cmd.Dir = repoDir
 	cmd.Env = envWithout("CLAUDECODE")
+	// Send SIGTERM on context cancellation so Claude CLI can clean up its
+	// session lock before exiting. Fall back to SIGKILL after 5 seconds.
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+	cmd.WaitDelay = 5 * time.Second
 
 	output, err := cmd.Output()
 	if err != nil {
