@@ -22,8 +22,12 @@ Your goal is to gather enough context to generate a well-crafted "prompt request
 Guidelines:
 - Start by understanding what the contributor wants and WHY they want it
 - Explore the codebase to understand relevant patterns and architecture
-- Ask clarifying questions one at a time using the "question" field with options
+- Ask clarifying questions using the "questions" array. Each question has a "text", "options", an optional "header" (short label like "Auth method"), and an optional "multiSelect" boolean
+- You may batch multiple independent questions in a single response when their answers do not depend on each other. Never batch questions where the answer to one would change the options of another
+- Use "multiSelect": true when multiple options can apply simultaneously (e.g. "Which platforms?" where the contributor might use several)
+- Provide a short "header" for each question to help contributors scan quickly
 - Keep questions simple and non-technical — contributors may not be developers
+- The UI automatically adds an "Other" freeform text option to every question, so do not include an "Other" option yourself
 - Be thorough: ask about edge cases, what happens to existing behavior, and anything that could be interpreted multiple ways. When you notice the feature might affect existing functionality, ask whether the contributor wants to keep, change, or remove it — never assume
 - If you find yourself about to write something in the prompt that the contributor didn't explicitly say, stop and ask about it instead
 - Do NOT set "prompt_ready" to true until you have asked enough questions to cover the feature without filling in gaps yourself. If you would need to infer or assume anything to write the prompt, ask first
@@ -44,26 +48,39 @@ const jsonSchema = `{
       "type": "string",
       "description": "Your response to the contributor"
     },
-    "question": {
-      "type": "object",
-      "properties": {
-        "text": {
-          "type": "string",
-          "description": "A clarifying question to ask"
-        },
-        "options": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "label": { "type": "string" },
-              "description": { "type": "string" }
-            },
-            "required": ["label", "description"]
+    "questions": {
+      "type": "array",
+      "description": "Clarifying questions to ask the contributor. You may batch multiple independent questions.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "header": {
+            "type": "string",
+            "description": "Short label displayed as a tag above the question (e.g. Auth method, Platform)"
+          },
+          "text": {
+            "type": "string",
+            "description": "The clarifying question to ask"
+          },
+          "multiSelect": {
+            "type": "boolean",
+            "description": "Allow selecting multiple options. Use when multiple answers can apply simultaneously"
+          },
+          "options": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": { "type": "string" },
+                "description": { "type": "string" }
+              },
+              "required": ["label", "description"]
+            }
           }
-        }
-      },
-      "required": ["text", "options"]
+        },
+        "required": ["text", "options"]
+      }
     },
     "prompt_ready": {
       "type": "boolean",
@@ -86,17 +103,19 @@ const jsonSchema = `{
 }`
 
 type Response struct {
-	Message             string    `json:"message"`
-	Question            *Question `json:"question,omitempty"`
-	PromptReady         bool      `json:"prompt_ready,omitempty"`
-	GeneratedTitle      string    `json:"generated_title,omitempty"`
-	GeneratedMotivation string    `json:"generated_motivation,omitempty"`
-	GeneratedPrompt     string    `json:"generated_prompt,omitempty"`
+	Message             string     `json:"message"`
+	Questions           []Question `json:"questions,omitempty"`
+	PromptReady         bool       `json:"prompt_ready,omitempty"`
+	GeneratedTitle      string     `json:"generated_title,omitempty"`
+	GeneratedMotivation string     `json:"generated_motivation,omitempty"`
+	GeneratedPrompt     string     `json:"generated_prompt,omitempty"`
 }
 
 type Question struct {
-	Text    string   `json:"text"`
-	Options []Option `json:"options"`
+	Header      string   `json:"header,omitempty"`
+	Text        string   `json:"text"`
+	MultiSelect bool     `json:"multiSelect,omitempty"`
+	Options     []Option `json:"options"`
 }
 
 type Option struct {

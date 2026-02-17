@@ -4,25 +4,42 @@
 </div>
 {{end}}
 
-{{if .Question}}
+{{if .Questions}}
 <div class="question-block" id="question-form">
-  <h4>{{.Question.Text}}</h4>
   <form hx-post="/prompt-requests/{{.PromptRequestID}}/messages"
         hx-target="#conversation"
         hx-swap="beforeend"
         hx-disabled-elt="find button"
-        hx-on::after-request="this.closest('.question-block').remove(); document.getElementById('conversation').scrollTop = document.getElementById('conversation').scrollHeight;">
-    <div class="options-list">
-      {{range .Question.Options}}
-      <label class="option-item">
-        <input type="radio" name="message" value="{{.Label}}" required>
-        <div>
-          <div class="option-label">{{.Label}}</div>
-          <div class="option-description">{{.Description}}</div>
-        </div>
-      </label>
-      {{end}}
+        hx-on::after-request="this.closest('.question-block').remove(); document.getElementById('message-form').style.display = ''; document.getElementById('conversation').scrollTop = document.getElementById('conversation').scrollHeight;">
+    {{range $q := .Questions}}
+    <div class="question-group">
+      {{if $q.Header}}<span class="question-header">{{$q.Header}}</span>{{end}}
+      <h4>{{$q.Text}}</h4>
+      <input type="hidden" name="q_{{$q.Index}}_header" value="{{$q.Header}}">
+      <div class="options-list">
+        {{range $q.Options}}
+        <label class="option-item">
+          {{if $q.MultiSelect}}<input type="checkbox" name="q_{{$q.Index}}" value="{{.Label}}">
+          {{else}}<input type="radio" name="q_{{$q.Index}}" value="{{.Label}}">
+          {{end}}
+          <div>
+            <div class="option-label">{{.Label}}</div>
+            <div class="option-description">{{.Description}}</div>
+          </div>
+        </label>
+        {{end}}
+        <label class="option-item other-option">
+          {{if $q.MultiSelect}}<input type="checkbox" name="q_{{$q.Index}}" value="__other__">
+          {{else}}<input type="radio" name="q_{{$q.Index}}" value="__other__">
+          {{end}}
+          <div>
+            <div class="option-label">Other</div>
+            <input type="text" name="q_{{$q.Index}}_other" class="other-input" placeholder="Type your answer..." maxlength="500">
+          </div>
+        </label>
+      </div>
     </div>
+    {{end}}
     <div class="mt-4">
       <button type="submit" class="btn btn-primary">Answer</button>
     </div>
