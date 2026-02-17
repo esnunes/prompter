@@ -22,6 +22,7 @@
       <form hx-post="/prompt-requests/{{.PromptRequest.ID}}/messages"
             hx-target="#conversation"
             hx-swap="beforeend"
+            hx-disabled-elt="find button"
             hx-on::after-request="this.closest('.question-block').remove(); document.getElementById('conversation').scrollTop = document.getElementById('conversation').scrollHeight;">
         <div class="options-list">
           {{range .LastQuestion.Options}}
@@ -60,6 +61,7 @@
           hx-post="/prompt-requests/{{.PromptRequest.ID}}/messages"
           hx-target="#conversation"
           hx-swap="beforeend"
+          hx-disabled-elt="find button, find textarea"
           hx-on::after-request="this.reset(); document.getElementById('conversation').scrollTop = document.getElementById('conversation').scrollHeight;">
       <textarea name="message" placeholder="Describe the feature you'd like..." rows="2" required></textarea>
       <button type="submit" class="btn btn-primary">Send</button>

@@ -10,6 +10,7 @@
   <form hx-post="/prompt-requests/{{.PromptRequestID}}/messages"
         hx-target="#conversation"
         hx-swap="beforeend"
+        hx-disabled-elt="find button"
         hx-on::after-request="this.closest('.question-block').remove(); document.getElementById('conversation').scrollTop = document.getElementById('conversation').scrollHeight;">
     <div class="options-list">
       {{range .Question.Options}}

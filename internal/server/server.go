@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 
 	"github.com/esnunes/prompter/internal/db"
 )
@@ -20,11 +21,12 @@ var templatesFS embed.FS
 var staticFS embed.FS
 
 type Server struct {
-	queries *db.Queries
-	pages   map[string]*template.Template
-	httpSrv *http.Server
-	ln      net.Listener
-	addr    string
+	queries    *db.Queries
+	pages      map[string]*template.Template
+	httpSrv    *http.Server
+	ln         net.Listener
+	addr       string
+	sessionMu  sync.Map // per-session mutex: session ID → *sync.Mutex
 }
 
 var funcMap = template.FuncMap{
@@ -152,6 +154,15 @@ func (s *Server) renderPage(w http.ResponseWriter, name string, data any) {
 		log.Printf("render error (%s): %v", name, err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
+}
+
+// lockSession returns the mutex for a given session ID. Callers must
+// call Unlock when done to allow subsequent requests for the same session.
+func (s *Server) lockSession(sessionID string) *sync.Mutex {
+	v, _ := s.sessionMu.LoadOrStore(sessionID, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu
 }
 
 func (s *Server) renderFragment(w http.ResponseWriter, name string, data any) {

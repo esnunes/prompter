@@ -184,6 +184,10 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Serialize Claude CLI calls per session to avoid "session already in use"
+	mu := s.lockSession(pr.SessionID)
+	defer mu.Unlock()
+
 	// Save user message
 	userMsg, err := s.queries.CreateMessage(id, "user", userMessage, nil)
 	if err != nil {
