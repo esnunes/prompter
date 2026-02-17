@@ -1,0 +1,33 @@
+{{define "title"}}Prompter — Dashboard{{end}}
+
+{{define "header-actions"}}
+<a href="/new" class="btn btn-primary">New prompt request</a>
+{{end}}
+
+{{define "content"}}
+{{if .PromptRequests}}
+<div class="dashboard-header">
+  <h2>Your prompt requests</h2>
+</div>
+{{range .PromptRequests}}
+<a href="/prompt-requests/{{.ID}}" class="card card-link">
+  <div class="pr-title">
+    {{if .Title}}{{.Title}}{{else}}Untitled{{end}}
+    <span class="badge {{if eq .Status "published"}}badge-published{{else}}badge-draft{{end}}">{{.Status}}</span>
+  </div>
+  <div class="pr-repo">{{.RepoURL}}</div>
+  <div class="pr-meta">
+    <span>{{.MessageCount}} messages</span>
+    {{if gt .RevisionCount 0}}<span>{{.RevisionCount}} revisions</span>{{end}}
+    <span>{{.CreatedAt.Format "Jan 2, 2006"}}</span>
+  </div>
+</a>
+{{end}}
+{{else}}
+<div class="empty-state">
+  <h2>No prompt requests yet</h2>
+  <p>Create your first prompt request to start an AI-guided conversation about a feature you'd like to see in an open source project.</p>
+  <a href="/new" class="btn btn-primary">Create prompt request</a>
+</div>
+{{end}}
+{{end}}

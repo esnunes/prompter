@@ -1,0 +1,36 @@
+{{define "title"}}{{.PromptRequest.Title}} — Prompter{{end}}
+
+{{define "header-actions"}}
+<div style="display:flex;gap:var(--space-3);align-items:center;">
+  <span class="pr-repo">{{.PromptRequest.RepoURL}}</span>
+  <span class="badge badge-published">published</span>
+  {{if .PromptRequest.IssueURL}}
+  <a href="{{deref .PromptRequest.IssueURL}}" target="_blank" class="btn btn-sm btn-secondary">View Issue</a>
+  {{end}}
+</div>
+{{end}}
+
+{{define "content"}}
+<h2 class="mb-4">{{if .PromptRequest.Title}}{{.PromptRequest.Title}}{{else}}Prompt Request{{end}}</h2>
+
+<h3 class="mb-2">Revisions</h3>
+{{range .Revisions}}
+<div class="revision">
+  <div class="revision-header">
+    <span>Published {{.PublishedAt.Format "Jan 2, 2006 3:04 PM"}}</span>
+  </div>
+  <div class="revision-content">{{.Content}}</div>
+</div>
+{{end}}
+
+<h3 class="mt-6 mb-2">Conversation</h3>
+{{range .Messages}}
+<div class="message message-{{.Role}}">
+  <div class="message-bubble">{{.Content}}</div>
+</div>
+{{end}}
+
+<div class="mt-6">
+  <a href="/prompt-requests/{{.PromptRequest.ID}}/continue" class="btn btn-secondary">Continue conversation</a>
+</div>
+{{end}}

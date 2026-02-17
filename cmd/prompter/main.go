@@ -9,6 +9,7 @@ import (
 
 	"github.com/esnunes/prompter/internal/db"
 	"github.com/esnunes/prompter/internal/repo"
+	"github.com/esnunes/prompter/internal/server"
 )
 
 func main() {
@@ -57,9 +58,12 @@ func run() error {
 		return fmt.Errorf("registering repository: %w", err)
 	}
 
-	fmt.Println("Server starting...")
-	_ = ctx // will be used by the HTTP server in Phase 2
-	return nil
+	srv, err := server.New(queries)
+	if err != nil {
+		return fmt.Errorf("creating server: %w", err)
+	}
+
+	return srv.Start(ctx)
 }
 
 func checkDependencies() error {

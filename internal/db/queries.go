@@ -18,6 +18,27 @@ func NewQueries(db *sql.DB) *Queries {
 
 // Repositories
 
+func (q *Queries) ListRepositories() ([]models.Repository, error) {
+	rows, err := q.db.Query(`SELECT id, url, local_path, created_at, updated_at FROM repositories ORDER BY url ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("listing repositories: %w", err)
+	}
+	defer rows.Close()
+
+	var results []models.Repository
+	for rows.Next() {
+		var r models.Repository
+		var createdAt, updatedAt string
+		if err := rows.Scan(&r.ID, &r.URL, &r.LocalPath, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scanning repository: %w", err)
+		}
+		r.CreatedAt, _ = time.Parse(time.DateTime, createdAt)
+		r.UpdatedAt, _ = time.Parse(time.DateTime, updatedAt)
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
 func (q *Queries) UpsertRepository(url, localPath string) (*models.Repository, error) {
 	_, err := q.db.Exec(
 		`INSERT INTO repositories (url, local_path) VALUES (?, ?)

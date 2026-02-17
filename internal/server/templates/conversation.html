@@ -1,0 +1,70 @@
+{{define "title"}}{{if .PromptRequest.Title}}{{.PromptRequest.Title}}{{else}}Conversation{{end}} — Prompter{{end}}
+
+{{define "header-actions"}}
+<div style="display:flex;gap:var(--space-3);align-items:center;">
+  <span class="pr-repo">{{.PromptRequest.RepoURL}}</span>
+  <span class="badge {{if eq .PromptRequest.Status "published"}}badge-published{{else}}badge-draft{{end}}">{{.PromptRequest.Status}}</span>
+</div>
+{{end}}
+
+{{define "content"}}
+<div class="chat-container">
+  <div class="chat-messages" id="conversation">
+    {{range .Messages}}
+    <div class="message message-{{.Role}}">
+      <div class="message-bubble">{{.Content}}</div>
+    </div>
+    {{end}}
+
+    {{if .LastQuestion}}
+    <div class="question-block" id="question-form">
+      <h4>{{.LastQuestion.Text}}</h4>
+      <form hx-post="/prompt-requests/{{.PromptRequest.ID}}/messages"
+            hx-target="#conversation"
+            hx-swap="beforeend"
+            hx-on::after-request="this.closest('.question-block').remove(); document.getElementById('conversation').scrollTop = document.getElementById('conversation').scrollHeight;">
+        <div class="options-list">
+          {{range .LastQuestion.Options}}
+          <label class="option-item">
+            <input type="radio" name="message" value="{{.Label}}" required>
+            <div>
+              <div class="option-label">{{.Label}}</div>
+              <div class="option-description">{{.Description}}</div>
+            </div>
+          </label>
+          {{end}}
+        </div>
+        <div class="mt-4" style="display:flex;gap:var(--space-3);">
+          <button type="submit" class="btn btn-primary">Answer</button>
+        </div>
+        <div class="htmx-indicator"><div class="spinner"></div> Thinking...</div>
+      </form>
+    </div>
+    {{end}}
+
+    {{if .PromptReady}}
+    <div class="prompt-ready">
+      <p>Prompt is ready to publish!</p>
+      <form hx-post="/prompt-requests/{{.PromptRequest.ID}}/publish"
+            hx-target="body"
+            hx-swap="innerHTML">
+        <button type="submit" class="btn btn-primary">Publish to GitHub</button>
+        <div class="htmx-indicator"><div class="spinner"></div> Publishing...</div>
+      </form>
+    </div>
+    {{end}}
+  </div>
+
+  <div class="chat-input">
+    <form class="chat-form"
+          hx-post="/prompt-requests/{{.PromptRequest.ID}}/messages"
+          hx-target="#conversation"
+          hx-swap="beforeend"
+          hx-on::after-request="this.reset(); document.getElementById('conversation').scrollTop = document.getElementById('conversation').scrollHeight;">
+      <textarea name="message" placeholder="Describe the feature you'd like..." rows="2" required></textarea>
+      <button type="submit" class="btn btn-primary">Send</button>
+      <div class="htmx-indicator"><div class="spinner"></div></div>
+    </form>
+  </div>
+</div>
+{{end}}
