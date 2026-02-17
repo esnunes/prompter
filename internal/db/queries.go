@@ -161,15 +161,22 @@ func (q *Queries) DeletePromptRequest(id int64) error {
 	return q.UpdatePromptRequestStatus(id, "deleted")
 }
 
-// GetLatestGeneratedPrompt finds the most recent generated_prompt from assistant messages
-func (q *Queries) GetLatestGeneratedPrompt(promptRequestID int64) (string, error) {
+// GeneratedContent holds the title, motivation, and prompt extracted from a Claude response.
+type GeneratedContent struct {
+	Title      string
+	Motivation string
+	Prompt     string
+}
+
+// GetLatestGeneratedContent finds the most recent generated_motivation and generated_prompt from assistant messages.
+func (q *Queries) GetLatestGeneratedContent(promptRequestID int64) (*GeneratedContent, error) {
 	rows, err := q.db.Query(
 		`SELECT raw_response FROM messages
 		 WHERE prompt_request_id = ? AND role = 'assistant' AND raw_response IS NOT NULL
 		 ORDER BY created_at DESC`, promptRequestID,
 	)
 	if err != nil {
-		return "", fmt.Errorf("querying messages: %w", err)
+		return nil, fmt.Errorf("querying messages: %w", err)
 	}
 	defer rows.Close()
 
@@ -178,16 +185,25 @@ func (q *Queries) GetLatestGeneratedPrompt(promptRequestID int64) (string, error
 		if err := rows.Scan(&raw); err != nil {
 			continue
 		}
-		if prompt := extractGeneratedPrompt(raw); prompt != "" {
-			return prompt, nil
+		if gc := extractGeneratedContent(raw); gc != nil {
+			return gc, nil
 		}
 	}
-	return "", fmt.Errorf("no generated prompt found")
+	return nil, fmt.Errorf("no generated prompt found")
 }
 
-func extractGeneratedPrompt(rawJSON string) string {
+func extractGeneratedContent(rawJSON string) *GeneratedContent {
 	type resp struct {
-		GeneratedPrompt string `json:"generated_prompt"`
+		GeneratedTitle      string `json:"generated_title"`
+		GeneratedMotivation string `json:"generated_motivation"`
+		GeneratedPrompt     string `json:"generated_prompt"`
+	}
+
+	extract := func(r *resp) *GeneratedContent {
+		if r != nil && r.GeneratedPrompt != "" {
+			return &GeneratedContent{Title: r.GeneratedTitle, Motivation: r.GeneratedMotivation, Prompt: r.GeneratedPrompt}
+		}
+		return nil
 	}
 
 	// The raw JSON is the full claude CLI output: {"type":"result","structured_output":{...},...}
@@ -196,24 +212,26 @@ func extractGeneratedPrompt(rawJSON string) string {
 		Result           string `json:"result"`
 	}
 	if err := json.Unmarshal([]byte(rawJSON), &wrapper); err == nil {
-		if wrapper.StructuredOutput != nil && wrapper.StructuredOutput.GeneratedPrompt != "" {
-			return wrapper.StructuredOutput.GeneratedPrompt
+		if gc := extract(wrapper.StructuredOutput); gc != nil {
+			return gc
 		}
 		if wrapper.Result != "" {
 			var r resp
-			if json.Unmarshal([]byte(wrapper.Result), &r) == nil && r.GeneratedPrompt != "" {
-				return r.GeneratedPrompt
+			if json.Unmarshal([]byte(wrapper.Result), &r) == nil {
+				if gc := extract(&r); gc != nil {
+					return gc
+				}
 			}
 		}
 	}
 
 	// Try direct parse
 	var r resp
-	if json.Unmarshal([]byte(rawJSON), &r) == nil && r.GeneratedPrompt != "" {
-		return r.GeneratedPrompt
+	if json.Unmarshal([]byte(rawJSON), &r) == nil {
+		return extract(&r)
 	}
 
-	return ""
+	return nil
 }
 
 // Messages
