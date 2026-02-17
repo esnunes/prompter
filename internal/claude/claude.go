@@ -85,13 +85,19 @@ type Option struct {
 	Description string `json:"description"`
 }
 
-func SendMessage(ctx context.Context, sessionID, repoDir, userMessage string) (*Response, string, error) {
+func SendMessage(ctx context.Context, sessionID, repoDir, userMessage string, resume bool) (*Response, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "claude",
-		"-p",
-		"--session-id", sessionID,
+	args := []string{"-p"}
+	if resume {
+		// Continue an existing session.
+		args = append(args, "--resume", sessionID)
+	} else {
+		// First message — create a new session with this ID.
+		args = append(args, "--session-id", sessionID)
+	}
+	args = append(args,
 		"--output-format", "json",
 		"--json-schema", jsonSchema,
 		"--system-prompt", systemPrompt,
@@ -99,6 +105,8 @@ func SendMessage(ctx context.Context, sessionID, repoDir, userMessage string) (*
 		"--permission-mode", "bypassPermissions",
 		userMessage,
 	)
+
+	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = repoDir
 	cmd.Env = envWithout("CLAUDECODE")
 	// Send SIGTERM on context cancellation so Claude CLI can clean up its

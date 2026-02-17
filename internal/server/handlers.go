@@ -188,6 +188,15 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	mu := s.lockSession(pr.SessionID)
 	defer mu.Unlock()
 
+	// Check if this session already has messages (resume vs. new)
+	existingMsgs, err := s.queries.ListMessages(id)
+	if err != nil {
+		log.Printf("checking existing messages: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	resume := len(existingMsgs) > 0
+
 	// Save user message
 	userMsg, err := s.queries.CreateMessage(id, "user", userMessage, nil)
 	if err != nil {
@@ -197,7 +206,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call Claude CLI
-	resp, rawJSON, err := claude.SendMessage(r.Context(), pr.SessionID, pr.RepoLocalPath, userMessage)
+	resp, rawJSON, err := claude.SendMessage(r.Context(), pr.SessionID, pr.RepoLocalPath, userMessage, resume)
 	if err != nil {
 		log.Printf("claude error: %v", err)
 		// Save error as assistant message so user sees it
