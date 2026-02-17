@@ -286,12 +286,13 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Compose issue body: motivation first, then prompt
+	// Compose issue body: motivation, prompt, and copyable raw prompt
+	copyBlock := "\n\n<details>\n<summary>Copy prompt</summary>\n\n```\n" + gc.Prompt + "\n```\n\n</details>"
 	var body string
 	if gc.Motivation != "" {
-		body = "## Why\n\n" + gc.Motivation + "\n\n## Prompt\n\n" + gc.Prompt
+		body = "## Why\n\n" + gc.Motivation + "\n\n## Prompt\n\n" + gc.Prompt + copyBlock
 	} else {
-		body = gc.Prompt
+		body = gc.Prompt + copyBlock
 	}
 
 	title := pr.Title
