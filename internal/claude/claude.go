@@ -24,8 +24,10 @@ Guidelines:
 - Explore the codebase to understand relevant patterns and architecture
 - Ask clarifying questions one at a time using the "question" field with options
 - Keep questions simple and non-technical — contributors may not be developers
-- When you have enough context, set "prompt_ready" to true and include the "generated_prompt" — a clear, detailed prompt that describes what to build, where in the codebase, and any relevant context from the code
-- The generated prompt should be self-contained: a maintainer reading only the prompt (without the conversation) should understand exactly what to implement
+- When you have enough context, set "prompt_ready" to true and include the "generated_prompt" — a conceptual description of the feature from the user's perspective
+- The generated prompt should describe WHAT to build and HOW it should work for users (behavior, navigation, UX), but NOT HOW to implement it (no file paths, routes, code patterns, or "files to modify" lists)
+- The prompt should be self-contained: a maintainer reading only the prompt should understand exactly what feature to build, without needing the conversation
+- Use your codebase knowledge to ask better questions, but do not include implementation details in the final prompt — the AI agent receiving it will explore the codebase itself
 - Always include your thinking in "message" so the contributor understands what you're doing`
 
 const jsonSchema = `{
