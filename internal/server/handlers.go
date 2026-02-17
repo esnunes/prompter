@@ -309,6 +309,8 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		title = "Prompt Request"
 	}
 
+	issueTitle := "Prompt Request: " + title
+
 	if pr.IssueNumber != nil {
 		// Update existing issue
 		if err := github.EditIssue(r.Context(), pr.RepoURL, *pr.IssueNumber, body); err != nil {
@@ -318,7 +320,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// Create new issue
-		issue, err := github.CreateIssue(r.Context(), pr.RepoURL, title, body)
+		issue, err := github.CreateIssue(r.Context(), pr.RepoURL, issueTitle, body)
 		if err != nil {
 			log.Printf("creating issue: %v", err)
 			http.Error(w, fmt.Sprintf("Failed to create GitHub issue: %v", err), http.StatusInternalServerError)
