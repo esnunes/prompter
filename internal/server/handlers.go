@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/esnunes/prompter/internal/claude"
 	"github.com/esnunes/prompter/internal/github"
@@ -76,13 +77,16 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 type conversationData struct {
 	PromptRequest *models.PromptRequest
 	Messages      []models.Message
-	LastQuestion  *questionData
+	LastQuestions  []questionData
 	PromptReady   bool
 }
 
 type questionData struct {
-	Text    string
-	Options []optionData
+	Header      string
+	Text        string
+	MultiSelect bool
+	Options     []optionData
+	Index       int
 }
 
 type optionData struct {
@@ -135,8 +139,8 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 	if len(messages) > 0 {
 		last := messages[len(messages)-1]
 		if last.Role == "assistant" && last.RawResponse != nil {
-			if q, promptReady := extractQuestionFromRaw(*last.RawResponse); q != nil {
-				data.LastQuestion = q
+			if questions, promptReady := extractQuestionsFromRaw(*last.RawResponse); len(questions) > 0 {
+				data.LastQuestions = questions
 				data.PromptReady = promptReady
 			} else {
 				data.PromptReady = promptReady
@@ -156,7 +160,7 @@ type publishedData struct {
 type messageFragmentData struct {
 	PromptRequestID int64
 	Messages        []models.Message
-	Question        *questionData
+	Questions       []questionData
 	PromptReady     bool
 }
 
@@ -173,6 +177,10 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userMessage := r.FormValue("message")
+	// If no direct message, try assembling from multi-question form fields
+	if userMessage == "" {
+		userMessage = assembleQuestionAnswers(r)
+	}
 	if userMessage == "" {
 		http.Error(w, "Message is required", http.StatusBadRequest)
 		return
@@ -254,16 +262,20 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		Messages:        []models.Message{*userMsg, *assistantMsg},
 	}
 
-	if resp.Question != nil {
-		fragment.Question = &questionData{
-			Text: resp.Question.Text,
+	for i, q := range resp.Questions {
+		qd := questionData{
+			Header:      q.Header,
+			Text:        q.Text,
+			MultiSelect: q.MultiSelect,
+			Index:       i,
 		}
-		for _, opt := range resp.Question.Options {
-			fragment.Question.Options = append(fragment.Question.Options, optionData{
+		for _, opt := range q.Options {
+			qd.Options = append(qd.Options, optionData{
 				Label:       opt.Label,
 				Description: opt.Description,
 			})
 		}
+		fragment.Questions = append(fragment.Questions, qd)
 	}
 
 	fragment.PromptReady = resp.PromptReady
@@ -361,22 +373,121 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-// extractQuestionFromRaw parses the raw Claude response to find a pending question
-func extractQuestionFromRaw(rawJSON string) (*questionData, bool) {
+// extractQuestionsFromRaw parses the raw Claude response to find pending questions.
+// It supports both the new "questions" array and the old singular "question" field
+// for backward compatibility with existing sessions.
+func extractQuestionsFromRaw(rawJSON string) ([]questionData, bool) {
 	resp := parseRawResponse(rawJSON)
 	if resp == nil {
 		return nil, false
 	}
 
-	if resp.Question == nil {
-		return nil, resp.PromptReady
+	if len(resp.Questions) == 0 {
+		// Try the old singular "question" field for backward compat
+		questions := extractLegacyQuestion(rawJSON)
+		return questions, resp.PromptReady
 	}
 
-	q := &questionData{Text: resp.Question.Text}
-	for _, opt := range resp.Question.Options {
-		q.Options = append(q.Options, optionData{Label: opt.Label, Description: opt.Description})
+	var questions []questionData
+	for i, q := range resp.Questions {
+		qd := questionData{
+			Header:      q.Header,
+			Text:        q.Text,
+			MultiSelect: q.MultiSelect,
+			Index:       i,
+		}
+		for _, opt := range q.Options {
+			qd.Options = append(qd.Options, optionData{Label: opt.Label, Description: opt.Description})
+		}
+		questions = append(questions, qd)
 	}
-	return q, resp.PromptReady
+	return questions, resp.PromptReady
+}
+
+// extractLegacyQuestion handles old raw_response JSON that used the singular "question" field.
+func extractLegacyQuestion(rawJSON string) []questionData {
+	// Parse looking for the old schema shape: {"question": {"text": "...", "options": [...]}}
+	var legacy struct {
+		StructuredOutput *struct {
+			Question *struct {
+				Text    string `json:"text"`
+				Options []struct {
+					Label       string `json:"label"`
+					Description string `json:"description"`
+				} `json:"options"`
+			} `json:"question"`
+		} `json:"structured_output"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &legacy); err != nil {
+		return nil
+	}
+	if legacy.StructuredOutput == nil || legacy.StructuredOutput.Question == nil {
+		return nil
+	}
+
+	q := legacy.StructuredOutput.Question
+	qd := questionData{Text: q.Text, Index: 0}
+	for _, opt := range q.Options {
+		qd.Options = append(qd.Options, optionData{Label: opt.Label, Description: opt.Description})
+	}
+	return []questionData{qd}
+}
+
+// assembleQuestionAnswers reads multi-question form fields (q_0, q_0_other, q_1, etc.)
+// and assembles them into a single answer string to send to Claude.
+func assembleQuestionAnswers(r *http.Request) string {
+	var answers []string
+	var headers []string
+
+	for i := 0; ; i++ {
+		key := fmt.Sprintf("q_%d", i)
+		header := r.FormValue(fmt.Sprintf("q_%d_header", i))
+
+		// Check if this question exists in the form
+		values, exists := r.Form[key]
+		if !exists {
+			break
+		}
+
+		otherText := strings.TrimSpace(r.FormValue(fmt.Sprintf("q_%d_other", i)))
+
+		// Build the answer for this question
+		var parts []string
+		for _, v := range values {
+			if v == "__other__" {
+				if otherText != "" {
+					parts = append(parts, "Other: "+otherText)
+				}
+			} else if v != "" {
+				parts = append(parts, v)
+			}
+		}
+
+		if len(parts) > 0 {
+			answers = append(answers, strings.Join(parts, ", "))
+			headers = append(headers, header)
+		}
+	}
+
+	if len(answers) == 0 {
+		return ""
+	}
+
+	// Single question: just the answer, no prefix
+	if len(answers) == 1 {
+		return answers[0]
+	}
+
+	// Multiple questions: prefix each with header or question index
+	var lines []string
+	for i, answer := range answers {
+		if headers[i] != "" {
+			lines = append(lines, headers[i]+": "+answer)
+		} else {
+			lines = append(lines, fmt.Sprintf("Q%d: %s", i+1, answer))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // parseRawResponse extracts a claude.Response from the raw JSON stored in the DB.
