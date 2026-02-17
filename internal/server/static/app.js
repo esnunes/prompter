@@ -4,7 +4,7 @@
       ".message-assistant .message-bubble:not([data-md-rendered]), .revision-content:not([data-md-rendered])"
     );
     bubbles.forEach(function (el) {
-      el.innerHTML = marked.parse(el.textContent);
+      el.innerHTML = DOMPurify.sanitize(marked.parse(el.textContent));
       el.setAttribute("data-md-rendered", "");
     });
   }
