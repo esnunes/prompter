@@ -186,23 +186,31 @@ func (q *Queries) GetLatestGeneratedPrompt(promptRequestID int64) (string, error
 }
 
 func extractGeneratedPrompt(rawJSON string) string {
-	// Try parsing directly
 	type resp struct {
 		GeneratedPrompt string `json:"generated_prompt"`
 	}
-	var r resp
-	if err := json.Unmarshal([]byte(rawJSON), &r); err == nil && r.GeneratedPrompt != "" {
-		return r.GeneratedPrompt
+
+	// The raw JSON is the full claude CLI output: {"type":"result","structured_output":{...},...}
+	var wrapper struct {
+		StructuredOutput *resp  `json:"structured_output"`
+		Result           string `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &wrapper); err == nil {
+		if wrapper.StructuredOutput != nil && wrapper.StructuredOutput.GeneratedPrompt != "" {
+			return wrapper.StructuredOutput.GeneratedPrompt
+		}
+		if wrapper.Result != "" {
+			var r resp
+			if json.Unmarshal([]byte(wrapper.Result), &r) == nil && r.GeneratedPrompt != "" {
+				return r.GeneratedPrompt
+			}
+		}
 	}
 
-	// Try wrapper format
-	var wrapper struct {
-		Result string `json:"result"`
-	}
-	if err := json.Unmarshal([]byte(rawJSON), &wrapper); err == nil && wrapper.Result != "" {
-		if err := json.Unmarshal([]byte(wrapper.Result), &r); err == nil && r.GeneratedPrompt != "" {
-			return r.GeneratedPrompt
-		}
+	// Try direct parse
+	var r resp
+	if json.Unmarshal([]byte(rawJSON), &r) == nil && r.GeneratedPrompt != "" {
+		return r.GeneratedPrompt
 	}
 
 	return ""

@@ -121,16 +121,23 @@ func SendMessage(ctx context.Context, sessionID, repoDir, userMessage string) (*
 }
 
 func parseResponse(output []byte) (*Response, error) {
-	// claude -p --output-format json wraps the result in {"result": "..."}
+	// claude -p --output-format json returns:
+	// {"type":"result", "structured_output": {...}, "result": "", ...}
 	var wrapper struct {
-		Result string `json:"result"`
+		StructuredOutput *Response `json:"structured_output"`
+		Result           string    `json:"result"`
 	}
-	if err := json.Unmarshal(output, &wrapper); err == nil && wrapper.Result != "" {
-		var resp Response
-		if err := json.Unmarshal([]byte(wrapper.Result), &resp); err != nil {
-			return &Response{Message: wrapper.Result}, nil
+	if err := json.Unmarshal(output, &wrapper); err == nil {
+		if wrapper.StructuredOutput != nil {
+			return wrapper.StructuredOutput, nil
 		}
-		return &resp, nil
+		if wrapper.Result != "" {
+			var resp Response
+			if err := json.Unmarshal([]byte(wrapper.Result), &resp); err != nil {
+				return &Response{Message: wrapper.Result}, nil
+			}
+			return &resp, nil
+		}
 	}
 
 	// Try parsing directly as our schema

@@ -330,19 +330,9 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 // extractQuestionFromRaw parses the raw Claude response to find a pending question
 func extractQuestionFromRaw(rawJSON string) (*questionData, bool) {
-	var resp claude.Response
-	// Try direct parse first
-	if err := json.Unmarshal([]byte(rawJSON), &resp); err != nil {
-		// Try wrapper format
-		var wrapper struct {
-			Result string `json:"result"`
-		}
-		if err := json.Unmarshal([]byte(rawJSON), &wrapper); err != nil || wrapper.Result == "" {
-			return nil, false
-		}
-		if err := json.Unmarshal([]byte(wrapper.Result), &resp); err != nil {
-			return nil, false
-		}
+	resp := parseRawResponse(rawJSON)
+	if resp == nil {
+		return nil, false
 	}
 
 	if resp.Question == nil {
@@ -354,4 +344,31 @@ func extractQuestionFromRaw(rawJSON string) (*questionData, bool) {
 		q.Options = append(q.Options, optionData{Label: opt.Label, Description: opt.Description})
 	}
 	return q, resp.PromptReady
+}
+
+// parseRawResponse extracts a claude.Response from the raw JSON stored in the DB.
+func parseRawResponse(rawJSON string) *claude.Response {
+	// The raw JSON is the full claude CLI output: {"type":"result","structured_output":{...},...}
+	var wrapper struct {
+		StructuredOutput *claude.Response `json:"structured_output"`
+		Result           string           `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &wrapper); err == nil {
+		if wrapper.StructuredOutput != nil {
+			return wrapper.StructuredOutput
+		}
+		if wrapper.Result != "" {
+			var resp claude.Response
+			if json.Unmarshal([]byte(wrapper.Result), &resp) == nil {
+				return &resp
+			}
+		}
+	}
+
+	// Try direct parse
+	var resp claude.Response
+	if json.Unmarshal([]byte(rawJSON), &resp) == nil && resp.Message != "" {
+		return &resp
+	}
+	return nil
 }
