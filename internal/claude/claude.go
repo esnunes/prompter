@@ -65,6 +65,10 @@ const jsonSchema = `{
       "type": "boolean",
       "description": "True when you have gathered enough context to generate the final prompt"
     },
+    "generated_title": {
+      "type": "string",
+      "description": "A short, descriptive title for the feature request (under 70 characters). Only when prompt_ready is true"
+    },
     "generated_motivation": {
       "type": "string",
       "description": "Why the feature is needed — the problem, use case, or goal from the contributor's perspective. Only when prompt_ready is true"
@@ -81,6 +85,7 @@ type Response struct {
 	Message             string    `json:"message"`
 	Question            *Question `json:"question,omitempty"`
 	PromptReady         bool      `json:"prompt_ready,omitempty"`
+	GeneratedTitle      string    `json:"generated_title,omitempty"`
 	GeneratedMotivation string    `json:"generated_motivation,omitempty"`
 	GeneratedPrompt     string    `json:"generated_prompt,omitempty"`
 }

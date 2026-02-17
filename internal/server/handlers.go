@@ -232,14 +232,20 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If AI generated a title and PR has none, auto-set it
-	if pr.Title == "" && resp.Message != "" {
-		// Use first 60 chars of the message as a rough title
-		title := resp.Message
-		if len(title) > 60 {
-			title = title[:60] + "..."
+	// Set title from generated_title when prompt is ready, or fall back to message truncation
+	if pr.Title == "" {
+		if resp.GeneratedTitle != "" {
+			s.queries.UpdatePromptRequestTitle(id, resp.GeneratedTitle)
+		} else if resp.Message != "" {
+			title := resp.Message
+			if len(title) > 60 {
+				title = title[:60] + "..."
+			}
+			s.queries.UpdatePromptRequestTitle(id, title)
 		}
-		s.queries.UpdatePromptRequestTitle(id, title)
+	} else if resp.GeneratedTitle != "" {
+		// Update title with the generated one even if a rough one was set earlier
+		s.queries.UpdatePromptRequestTitle(id, resp.GeneratedTitle)
 	}
 
 	// Build fragment response
@@ -296,7 +302,10 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	title := pr.Title
-	if title == "" {
+	if gc.Title != "" {
+		title = gc.Title
+		s.queries.UpdatePromptRequestTitle(id, title)
+	} else if title == "" {
 		title = "Prompt Request"
 	}
 

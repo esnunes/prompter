@@ -161,8 +161,9 @@ func (q *Queries) DeletePromptRequest(id int64) error {
 	return q.UpdatePromptRequestStatus(id, "deleted")
 }
 
-// GeneratedContent holds the motivation and prompt extracted from a Claude response.
+// GeneratedContent holds the title, motivation, and prompt extracted from a Claude response.
 type GeneratedContent struct {
+	Title      string
 	Motivation string
 	Prompt     string
 }
@@ -193,13 +194,14 @@ func (q *Queries) GetLatestGeneratedContent(promptRequestID int64) (*GeneratedCo
 
 func extractGeneratedContent(rawJSON string) *GeneratedContent {
 	type resp struct {
+		GeneratedTitle      string `json:"generated_title"`
 		GeneratedMotivation string `json:"generated_motivation"`
 		GeneratedPrompt     string `json:"generated_prompt"`
 	}
 
 	extract := func(r *resp) *GeneratedContent {
 		if r != nil && r.GeneratedPrompt != "" {
-			return &GeneratedContent{Motivation: r.GeneratedMotivation, Prompt: r.GeneratedPrompt}
+			return &GeneratedContent{Title: r.GeneratedTitle, Motivation: r.GeneratedMotivation, Prompt: r.GeneratedPrompt}
 		}
 		return nil
 	}
