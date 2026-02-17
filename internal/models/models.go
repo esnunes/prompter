@@ -23,6 +23,7 @@ type PromptRequest struct {
 
 	// Joined fields (not stored directly)
 	RepoURL        string
+	RepoLocalPath  string
 	MessageCount   int
 	RevisionCount  int
 	LatestRevision *time.Time

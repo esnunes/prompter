@@ -1,11 +1,13 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 
+	"github.com/esnunes/prompter/internal/claude"
 	"github.com/esnunes/prompter/internal/models"
 
 	"github.com/google/uuid"
@@ -122,10 +124,26 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.renderPage(w, "conversation.html", conversationData{
+	// Build conversation data with last question if present
+	data := conversationData{
 		PromptRequest: pr,
 		Messages:      messages,
-	})
+	}
+
+	// Check the last assistant message for a pending question
+	if len(messages) > 0 {
+		last := messages[len(messages)-1]
+		if last.Role == "assistant" && last.RawResponse != nil {
+			if q, promptReady := extractQuestionFromRaw(*last.RawResponse); q != nil {
+				data.LastQuestion = q
+				data.PromptReady = promptReady
+			} else {
+				data.PromptReady = promptReady
+			}
+		}
+	}
+
+	s.renderPage(w, "conversation.html", data)
 }
 
 type publishedData struct {
@@ -134,9 +152,103 @@ type publishedData struct {
 	Revisions     []models.Revision
 }
 
-// handleSendMessage is a stub — will be implemented in Phase 3 (Claude CLI integration)
+type messageFragmentData struct {
+	PromptRequestID int64
+	Messages        []models.Message
+	Question        *questionData
+	PromptReady     bool
+}
+
 func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "Not implemented yet", http.StatusNotImplemented)
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	userMessage := r.FormValue("message")
+	if userMessage == "" {
+		http.Error(w, "Message is required", http.StatusBadRequest)
+		return
+	}
+
+	pr, err := s.queries.GetPromptRequest(id)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	// Save user message
+	userMsg, err := s.queries.CreateMessage(id, "user", userMessage, nil)
+	if err != nil {
+		log.Printf("saving user message: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Call Claude CLI
+	resp, rawJSON, err := claude.SendMessage(r.Context(), pr.SessionID, pr.RepoLocalPath, userMessage)
+	if err != nil {
+		log.Printf("claude error: %v", err)
+		// Save error as assistant message so user sees it
+		errMsg := fmt.Sprintf("Sorry, I encountered an error: %v", err)
+		s.queries.CreateMessage(id, "assistant", errMsg, nil)
+
+		fragment := messageFragmentData{
+			PromptRequestID: id,
+			Messages: []models.Message{
+				*userMsg,
+				{Role: "assistant", Content: errMsg},
+			},
+		}
+		s.renderFragment(w, "message_fragment.html", fragment)
+		return
+	}
+
+	// Save assistant message
+	assistantMsg, err := s.queries.CreateMessage(id, "assistant", resp.Message, &rawJSON)
+	if err != nil {
+		log.Printf("saving assistant message: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// If AI generated a title and PR has none, auto-set it
+	if pr.Title == "" && resp.Message != "" {
+		// Use first 60 chars of the message as a rough title
+		title := resp.Message
+		if len(title) > 60 {
+			title = title[:60] + "..."
+		}
+		s.queries.UpdatePromptRequestTitle(id, title)
+	}
+
+	// Build fragment response
+	fragment := messageFragmentData{
+		PromptRequestID: id,
+		Messages:        []models.Message{*userMsg, *assistantMsg},
+	}
+
+	if resp.Question != nil {
+		fragment.Question = &questionData{
+			Text: resp.Question.Text,
+		}
+		for _, opt := range resp.Question.Options {
+			fragment.Question.Options = append(fragment.Question.Options, optionData{
+				Label:       opt.Label,
+				Description: opt.Description,
+			})
+		}
+	}
+
+	fragment.PromptReady = resp.PromptReady
+
+	s.renderFragment(w, "message_fragment.html", fragment)
 }
 
 // handlePublish is a stub — will be implemented in Phase 4 (GitHub integration)
@@ -158,4 +270,32 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// extractQuestionFromRaw parses the raw Claude response to find a pending question
+func extractQuestionFromRaw(rawJSON string) (*questionData, bool) {
+	var resp claude.Response
+	// Try direct parse first
+	if err := json.Unmarshal([]byte(rawJSON), &resp); err != nil {
+		// Try wrapper format
+		var wrapper struct {
+			Result string `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(rawJSON), &wrapper); err != nil || wrapper.Result == "" {
+			return nil, false
+		}
+		if err := json.Unmarshal([]byte(wrapper.Result), &resp); err != nil {
+			return nil, false
+		}
+	}
+
+	if resp.Question == nil {
+		return nil, resp.PromptReady
+	}
+
+	q := &questionData{Text: resp.Question.Text}
+	for _, opt := range resp.Question.Options {
+		q.Options = append(q.Options, optionData{Label: opt.Label, Description: opt.Description})
+	}
+	return q, resp.PromptReady
 }

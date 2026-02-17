@@ -85,12 +85,12 @@ func (q *Queries) GetPromptRequest(id int64) (*models.PromptRequest, error) {
 	err := q.db.QueryRow(
 		`SELECT pr.id, pr.repository_id, pr.title, pr.status, pr.session_id,
 		        pr.issue_number, pr.issue_url, pr.created_at, pr.updated_at,
-		        r.url
+		        r.url, r.local_path
 		 FROM prompt_requests pr
 		 JOIN repositories r ON r.id = pr.repository_id
 		 WHERE pr.id = ?`, id,
 	).Scan(&pr.ID, &pr.RepositoryID, &pr.Title, &pr.Status, &pr.SessionID,
-		&pr.IssueNumber, &pr.IssueURL, &createdAt, &updatedAt, &pr.RepoURL)
+		&pr.IssueNumber, &pr.IssueURL, &createdAt, &updatedAt, &pr.RepoURL, &pr.RepoLocalPath)
 	if err != nil {
 		return nil, fmt.Errorf("getting prompt request: %w", err)
 	}
