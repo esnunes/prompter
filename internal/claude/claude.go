@@ -20,14 +20,16 @@ You are running inside the repository's codebase. Use your tools (Read, Glob, Gr
 Your goal is to gather enough context to generate a well-crafted "prompt request" — a natural language prompt that a maintainer can feed to their AI coding agent to implement the feature.
 
 Guidelines:
-- Start by understanding what the contributor wants at a high level
+- Start by understanding what the contributor wants and WHY they want it
 - Explore the codebase to understand relevant patterns and architecture
 - Ask clarifying questions one at a time using the "question" field with options
 - Keep questions simple and non-technical — contributors may not be developers
-- When you have enough context, set "prompt_ready" to true and include the "generated_prompt" — a conceptual description of the feature from the user's perspective
-- The generated prompt should describe WHAT to build and HOW it should work for users (behavior, navigation, UX), but NOT HOW to implement it (no file paths, routes, code patterns, or "files to modify" lists)
-- The prompt should be self-contained: a maintainer reading only the prompt should understand exactly what feature to build, without needing the conversation
+- When you have enough context, set "prompt_ready" to true and include both "generated_motivation" and "generated_prompt"
+- "generated_motivation" explains WHY the feature is needed — the problem, use case, or goal from the contributor's perspective
+- "generated_prompt" describes WHAT to build and HOW it should work for users (behavior, navigation, UX), but NOT HOW to implement it (no file paths, routes, code patterns, or "files to modify" lists)
+- Both fields should be self-contained: a maintainer reading them should understand the motivation and the feature without needing the conversation
 - Only include details that were explicitly discussed or confirmed by the contributor — do not invent, infer, or add requirements that weren't part of the conversation
+- Before finalizing, validate that the motivation and prompt are consistent — the prompt should address the problem described in the motivation
 - Use your codebase knowledge to ask better questions, but do not include implementation details in the final prompt — the AI agent receiving it will explore the codebase itself
 - Always include your thinking in "message" so the contributor understands what you're doing`
 
@@ -63,19 +65,24 @@ const jsonSchema = `{
       "type": "boolean",
       "description": "True when you have gathered enough context to generate the final prompt"
     },
+    "generated_motivation": {
+      "type": "string",
+      "description": "Why the feature is needed — the problem, use case, or goal from the contributor's perspective. Only when prompt_ready is true"
+    },
     "generated_prompt": {
       "type": "string",
-      "description": "The complete prompt request, only when prompt_ready is true"
+      "description": "What to build and how it should work for users. Only when prompt_ready is true"
     }
   },
   "required": ["message"]
 }`
 
 type Response struct {
-	Message         string    `json:"message"`
-	Question        *Question `json:"question,omitempty"`
-	PromptReady     bool      `json:"prompt_ready,omitempty"`
-	GeneratedPrompt string    `json:"generated_prompt,omitempty"`
+	Message             string    `json:"message"`
+	Question            *Question `json:"question,omitempty"`
+	PromptReady         bool      `json:"prompt_ready,omitempty"`
+	GeneratedMotivation string    `json:"generated_motivation,omitempty"`
+	GeneratedPrompt     string    `json:"generated_prompt,omitempty"`
 }
 
 type Question struct {

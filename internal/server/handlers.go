@@ -278,12 +278,20 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get the generated prompt
-	prompt, err := s.queries.GetLatestGeneratedPrompt(id)
+	// Get the generated content (motivation + prompt)
+	gc, err := s.queries.GetLatestGeneratedContent(id)
 	if err != nil {
-		log.Printf("getting generated prompt: %v", err)
+		log.Printf("getting generated content: %v", err)
 		http.Error(w, "No generated prompt found. Continue the conversation until the AI generates a prompt.", http.StatusBadRequest)
 		return
+	}
+
+	// Compose issue body: motivation first, then prompt
+	var body string
+	if gc.Motivation != "" {
+		body = "## Why\n\n" + gc.Motivation + "\n\n## Prompt\n\n" + gc.Prompt
+	} else {
+		body = gc.Prompt
 	}
 
 	title := pr.Title
@@ -293,14 +301,14 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 
 	if pr.IssueNumber != nil {
 		// Update existing issue
-		if err := github.EditIssue(r.Context(), pr.RepoURL, *pr.IssueNumber, prompt); err != nil {
+		if err := github.EditIssue(r.Context(), pr.RepoURL, *pr.IssueNumber, body); err != nil {
 			log.Printf("editing issue: %v", err)
 			http.Error(w, fmt.Sprintf("Failed to update GitHub issue: %v", err), http.StatusInternalServerError)
 			return
 		}
 	} else {
 		// Create new issue
-		issue, err := github.CreateIssue(r.Context(), pr.RepoURL, title, prompt)
+		issue, err := github.CreateIssue(r.Context(), pr.RepoURL, title, body)
 		if err != nil {
 			log.Printf("creating issue: %v", err)
 			http.Error(w, fmt.Sprintf("Failed to create GitHub issue: %v", err), http.StatusInternalServerError)
@@ -312,7 +320,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create revision
-	if _, err := s.queries.CreateRevision(id, prompt); err != nil {
+	if _, err := s.queries.CreateRevision(id, body); err != nil {
 		log.Printf("creating revision: %v", err)
 	}
 
