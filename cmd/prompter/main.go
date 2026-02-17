@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 
 	"github.com/esnunes/prompter/internal/db"
+	"github.com/esnunes/prompter/internal/github"
 	"github.com/esnunes/prompter/internal/repo"
 	"github.com/esnunes/prompter/internal/server"
 )
@@ -24,7 +26,14 @@ func run() error {
 	defer stop()
 
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: prompter <github.com/owner/repo>")
+		fmt.Println("Prompter — create prompt requests for open source projects")
+		fmt.Println()
+		fmt.Println("Usage: prompter <github.com/owner/repo>")
+		fmt.Println()
+		fmt.Println("Prerequisites:")
+		fmt.Println("  - claude CLI: https://docs.anthropic.com/en/docs/claude-code")
+		fmt.Println("  - gh CLI:     https://cli.github.com")
+		return fmt.Errorf("no repository specified")
 	}
 	repoURL := os.Args[1]
 
@@ -32,7 +41,7 @@ func run() error {
 		return err
 	}
 
-	if err := checkDependencies(); err != nil {
+	if err := checkDependencies(ctx); err != nil {
 		return err
 	}
 
@@ -63,10 +72,16 @@ func run() error {
 		return fmt.Errorf("creating server: %w", err)
 	}
 
-	return srv.Start(ctx)
+	if err := srv.Listen(); err != nil {
+		return err
+	}
+
+	openBrowser("http://" + srv.Addr())
+
+	return srv.Serve(ctx)
 }
 
-func checkDependencies() error {
+func checkDependencies(ctx context.Context) error {
 	for _, dep := range []struct {
 		name    string
 		helpURL string
@@ -74,13 +89,30 @@ func checkDependencies() error {
 		{"claude", "https://docs.anthropic.com/en/docs/claude-code"},
 		{"gh", "https://cli.github.com"},
 	} {
-		if _, err := findExecutable(dep.name); err != nil {
+		if _, err := exec.LookPath(dep.name); err != nil {
 			return fmt.Errorf("%s CLI not found. Install: %s", dep.name, dep.helpURL)
 		}
 	}
+
+	// Check gh authentication
+	if err := github.CheckAuth(ctx); err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func findExecutable(name string) (string, error) {
-	return exec.LookPath(name)
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		return
+	}
+	cmd.Start()
 }

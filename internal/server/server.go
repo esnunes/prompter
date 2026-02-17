@@ -23,6 +23,7 @@ type Server struct {
 	queries *db.Queries
 	pages   map[string]*template.Template
 	httpSrv *http.Server
+	ln      net.Listener
 	addr    string
 }
 
@@ -107,23 +108,31 @@ func parsePages() (map[string]*template.Template, error) {
 	return pages, nil
 }
 
-func (s *Server) Start(ctx context.Context) error {
+// Listen binds the server to a random available port. Call Serve to start handling requests.
+func (s *Server) Listen() error {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return fmt.Errorf("binding port: %w", err)
 	}
+	s.ln = ln
 	s.addr = ln.Addr().String()
+	return nil
+}
 
+// Serve starts handling HTTP requests. Blocks until ctx is cancelled.
+func (s *Server) Serve(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 		s.httpSrv.Shutdown(context.Background())
 	}()
 
 	fmt.Printf("Prompter running at http://%s\n", s.addr)
+	fmt.Println("Press Ctrl+C to stop.")
 
-	if err := s.httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
+	if err := s.httpSrv.Serve(s.ln); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("serving: %w", err)
 	}
+	fmt.Println("\nShutting down...")
 	return nil
 }
 
