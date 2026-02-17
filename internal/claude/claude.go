@@ -27,6 +27,7 @@ Guidelines:
 - When you have enough context, set "prompt_ready" to true and include the "generated_prompt" — a conceptual description of the feature from the user's perspective
 - The generated prompt should describe WHAT to build and HOW it should work for users (behavior, navigation, UX), but NOT HOW to implement it (no file paths, routes, code patterns, or "files to modify" lists)
 - The prompt should be self-contained: a maintainer reading only the prompt should understand exactly what feature to build, without needing the conversation
+- Only include details that were explicitly discussed or confirmed by the contributor — do not invent, infer, or add requirements that weren't part of the conversation
 - Use your codebase knowledge to ask better questions, but do not include implementation details in the final prompt — the AI agent receiving it will explore the codebase itself
 - Always include your thinking in "message" so the contributor understands what you're doing`
 
