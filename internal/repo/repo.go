@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+
+	"github.com/esnunes/prompter/internal/paths"
 )
 
 var repoURLPattern = regexp.MustCompile(`^github\.com/[\w.\-]+/[\w.\-]+$`)
@@ -19,11 +21,11 @@ func ValidateURL(url string) error {
 }
 
 func LocalPath(repoURL string) (string, error) {
-	home, err := os.UserHomeDir()
+	cacheDir, err := paths.CacheDir()
 	if err != nil {
-		return "", fmt.Errorf("getting home directory: %w", err)
+		return "", fmt.Errorf("getting cache directory: %w", err)
 	}
-	return filepath.Join(home, ".prompter", "repos", repoURL), nil
+	return filepath.Join(cacheDir, "repos", repoURL), nil
 }
 
 func EnsureCloned(ctx context.Context, repoURL string) (string, error) {

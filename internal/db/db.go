@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/esnunes/prompter/internal/paths"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -53,13 +55,12 @@ CREATE INDEX IF NOT EXISTS idx_revisions_prompt_request ON revisions(prompt_requ
 `
 
 func DBPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := paths.CacheDir()
 	if err != nil {
-		return "", fmt.Errorf("getting home directory: %w", err)
+		return "", fmt.Errorf("getting cache directory: %w", err)
 	}
-	dir := filepath.Join(home, ".prompter")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("creating .prompter directory: %w", err)
+		return "", fmt.Errorf("creating cache directory: %w", err)
 	}
 	return filepath.Join(dir, "prompter.db"), nil
 }
