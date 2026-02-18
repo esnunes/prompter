@@ -133,6 +133,39 @@ func (q *Queries) ListPromptRequests() ([]models.PromptRequest, error) {
 	return results, rows.Err()
 }
 
+func (q *Queries) ListPromptRequestsByRepoURL(repoURL string) ([]models.PromptRequest, error) {
+	rows, err := q.db.Query(
+		`SELECT pr.id, pr.repository_id, pr.title, pr.status, pr.session_id,
+		        pr.issue_number, pr.issue_url, pr.created_at, pr.updated_at,
+		        r.url,
+		        (SELECT COUNT(*) FROM messages WHERE prompt_request_id = pr.id) as message_count,
+		        (SELECT COUNT(*) FROM revisions WHERE prompt_request_id = pr.id) as revision_count
+		 FROM prompt_requests pr
+		 JOIN repositories r ON r.id = pr.repository_id
+		 WHERE pr.status != 'deleted' AND r.url = ?
+		 ORDER BY pr.updated_at DESC`, repoURL,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing prompt requests by repo: %w", err)
+	}
+	defer rows.Close()
+
+	var results []models.PromptRequest
+	for rows.Next() {
+		var pr models.PromptRequest
+		var createdAt, updatedAt string
+		if err := rows.Scan(&pr.ID, &pr.RepositoryID, &pr.Title, &pr.Status, &pr.SessionID,
+			&pr.IssueNumber, &pr.IssueURL, &createdAt, &updatedAt, &pr.RepoURL,
+			&pr.MessageCount, &pr.RevisionCount); err != nil {
+			return nil, fmt.Errorf("scanning prompt request: %w", err)
+		}
+		pr.CreatedAt, _ = time.Parse(time.DateTime, createdAt)
+		pr.UpdatedAt, _ = time.Parse(time.DateTime, updatedAt)
+		results = append(results, pr)
+	}
+	return results, rows.Err()
+}
+
 func (q *Queries) UpdatePromptRequestTitle(id int64, title string) error {
 	_, err := q.db.Exec(
 		`UPDATE prompt_requests SET title = ?, updated_at = datetime('now') WHERE id = ?`,

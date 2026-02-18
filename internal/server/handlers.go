@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"github.com/esnunes/prompter/internal/claude"
 	"github.com/esnunes/prompter/internal/github"
 	"github.com/esnunes/prompter/internal/models"
+	"github.com/esnunes/prompter/internal/repo"
 
 	"github.com/google/uuid"
 )
@@ -29,53 +31,102 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	s.renderPage(w, "dashboard.html", dashboardData{PromptRequests: prs})
 }
 
-type newData struct {
-	Repositories []models.Repository
+type repoData struct {
+	RepoURL        string
+	Org            string
+	Repo           string
+	Error          string
+	PromptRequests []models.PromptRequest
 }
 
-func (s *Server) handleNew(w http.ResponseWriter, r *http.Request) {
-	repos, err := s.queries.ListRepositories()
+func (s *Server) handleRepoPage(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
+
+	if err := repo.ValidateURL(repoURL); err != nil {
+		s.renderPage(w, "repo.html", repoData{
+			RepoURL: repoURL,
+			Org:     org,
+			Repo:    repoName,
+			Error:   "Invalid repository URL format.",
+		})
+		return
+	}
+
+	// Verify repo exists on GitHub
+	if err := github.VerifyRepo(r.Context(), org, repoName); err != nil {
+		s.renderPage(w, "repo.html", repoData{
+			RepoURL: repoURL,
+			Org:     org,
+			Repo:    repoName,
+			Error:   "This repository doesn't exist on GitHub or is not accessible.",
+		})
+		return
+	}
+
+	prs, err := s.queries.ListPromptRequestsByRepoURL(repoURL)
 	if err != nil {
-		log.Printf("listing repositories: %v", err)
+		log.Printf("listing prompt requests for repo: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	s.renderPage(w, "new.html", newData{Repositories: repos})
+
+	s.renderPage(w, "repo.html", repoData{
+		RepoURL:        repoURL,
+		Org:            org,
+		Repo:           repoName,
+		PromptRequests: prs,
+	})
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
 
-	repoID, err := strconv.ParseInt(r.FormValue("repo_id"), 10, 64)
+	// Compute local path and upsert repo
+	localPath, err := repo.LocalPath(repoURL)
 	if err != nil {
-		http.Error(w, "Invalid repository", http.StatusBadRequest)
+		log.Printf("computing local path: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	title := r.FormValue("title")
-	sessionID := uuid.New().String()
+	repoRecord, err := s.queries.UpsertRepository(repoURL, localPath)
+	if err != nil {
+		log.Printf("upserting repository: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 
-	pr, err := s.queries.CreatePromptRequest(repoID, sessionID)
+	sessionID := uuid.New().String()
+	pr, err := s.queries.CreatePromptRequest(repoRecord.ID, sessionID)
 	if err != nil {
 		log.Printf("creating prompt request: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	if title != "" {
-		if err := s.queries.UpdatePromptRequestTitle(pr.ID, title); err != nil {
-			log.Printf("updating title: %v", err)
-		}
+	// Determine initial status based on whether the repo is already cloned
+	cloned, _ := repo.IsCloned(repoURL)
+	if cloned {
+		s.setRepoStatus(pr.ID, "pulling", "")
+	} else {
+		s.setRepoStatus(pr.ID, "cloning", "")
 	}
 
-	http.Redirect(w, r, fmt.Sprintf("/prompt-requests/%d", pr.ID), http.StatusSeeOther)
+	// Launch async clone/pull
+	go s.asyncEnsureCloned(pr.ID, repoURL)
+
+	http.Redirect(w, r, fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d", org, repoName, pr.ID), http.StatusSeeOther)
 }
 
 type conversationData struct {
 	PromptRequest *models.PromptRequest
+	Org           string
+	Repo          string
+	RepoStatus    string // "cloning", "pulling", "ready", "error", or "" (no active operation)
 	Timeline      []timelineItem
 	LastQuestions  []questionData
 	PromptReady   bool
@@ -102,6 +153,9 @@ type optionData struct {
 }
 
 func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -128,8 +182,23 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check repo status for polling div
+	statusEntry := s.getRepoStatus(id)
+	repoStatus := statusEntry.Status
+	if repoStatus == "" {
+		// Server restart recovery: check filesystem
+		repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
+		cloned, _ := repo.IsCloned(repoURL)
+		if cloned {
+			repoStatus = "ready"
+		}
+	}
+
 	data := conversationData{
 		PromptRequest: pr,
+		Org:           org,
+		Repo:          repoName,
+		RepoStatus:    repoStatus,
 		Timeline:      buildTimeline(messages, revisions),
 		Revisions:     revisions,
 	}
@@ -157,12 +226,17 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 
 type messageFragmentData struct {
 	PromptRequestID int64
+	Org             string
+	Repo            string
 	Messages        []models.Message
 	Questions       []questionData
 	PromptReady     bool
 }
 
 func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -187,6 +261,29 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	pr, err := s.queries.GetPromptRequest(id)
 	if err != nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	// If repo is not ready, save the message but don't process with Claude yet
+	statusEntry := s.getRepoStatus(id)
+	if statusEntry.Status != "" && statusEntry.Status != "ready" {
+		userMsg, err := s.queries.CreateMessage(id, "user", userMessage, nil)
+		if err != nil {
+			log.Printf("saving user message: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		// Return user message bubble + disable the input form until auto-send completes
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fragment := messageFragmentData{
+			PromptRequestID: id,
+			Org:             org,
+			Repo:            repoName,
+			Messages:        []models.Message{*userMsg},
+		}
+		s.pages["message_fragment.html"].ExecuteTemplate(w, "message_fragment.html", fragment)
+		// Disable the message form — it will be re-enabled when the auto-send response arrives
+		fmt.Fprint(w, `<script>(function(){var f=document.getElementById('message-form');if(f){f.querySelector('textarea').disabled=true;f.querySelector('button').disabled=true;}})();</script>`)
 		return
 	}
 
@@ -221,6 +318,8 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 		fragment := messageFragmentData{
 			PromptRequestID: id,
+			Org:             org,
+			Repo:            repoName,
 			Messages: []models.Message{
 				*userMsg,
 				{Role: "assistant", Content: errMsg},
@@ -257,6 +356,8 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	// Build fragment response
 	fragment := messageFragmentData{
 		PromptRequestID: id,
+		Org:             org,
+		Repo:            repoName,
 		Messages:        []models.Message{*userMsg, *assistantMsg},
 	}
 
@@ -282,6 +383,9 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -355,11 +459,21 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		log.Printf("updating status: %v", err)
 	}
 
-	// Redirect to the published view
-	http.Redirect(w, r, fmt.Sprintf("/prompt-requests/%d", id), http.StatusSeeOther)
+	// Use HX-Redirect for HTMX requests to trigger a full page navigation
+	// (regular http.Redirect would be followed inline, producing malformed DOM)
+	redirectURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d", org, repoName, id)
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Redirect", redirectURL)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -372,7 +486,217 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/github.com/%s/%s/prompt-requests", org, repoName), http.StatusSeeOther)
+}
+
+// asyncEnsureCloned runs clone/pull in the background, updating status in sync.Map.
+func (s *Server) asyncEnsureCloned(prID int64, repoURL string) {
+	// Serialize clone/pull operations per repo to prevent concurrent git corruption
+	mu := s.lockRepo(repoURL)
+	defer mu.Unlock()
+
+	_, err := repo.EnsureCloned(context.Background(), repoURL)
+	if err != nil {
+		log.Printf("async clone/pull failed for %s: %v", repoURL, err)
+		s.setRepoStatus(prID, "error", err.Error())
+		return
+	}
+	s.setRepoStatus(prID, "ready", "")
+}
+
+type statusFragmentData struct {
+	Status   string
+	Error    string
+	PollURL  string
+	RetryURL string
+}
+
+func (s *Server) handleRepoStatus(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
+	retryURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/retry", org, repoName, id)
+
+	entry := s.getRepoStatus(id)
+
+	// Server restart recovery: if no status tracked, check filesystem
+	if entry.Status == "" {
+		cloned, _ := repo.IsCloned(repoURL)
+		if cloned {
+			s.setRepoStatus(id, "ready", "")
+			entry = repoStatusEntry{Status: "ready"}
+		} else {
+			// Auto-start clone
+			s.setRepoStatus(id, "cloning", "")
+			go s.asyncEnsureCloned(id, repoURL)
+			entry = repoStatusEntry{Status: "cloning"}
+		}
+	}
+
+	// If ready, check for a pending user message to auto-send
+	if entry.Status == "ready" {
+		lastMsg, err := s.queries.GetLastMessage(id)
+		if err == nil && lastMsg.Role == "user" {
+			// Atomically transition to "processing" to prevent duplicate Claude calls
+			old := repoStatusEntry{Status: "ready"}
+			if s.repoStatus.CompareAndSwap(id, old, repoStatusEntry{Status: "processing"}) {
+				go s.backgroundSendMessage(id)
+			}
+			entry = repoStatusEntry{Status: "processing"}
+		}
+	}
+
+	// If responded, deliver the assistant message and stop polling.
+	// We replace #repo-status with the response content plus a script that
+	// moves the messages into #conversation at the correct position.
+	if entry.Status == "responded" {
+		s.repoStatus.Delete(id)
+		lastMsg, err := s.queries.GetLastMessage(id)
+		if err == nil && lastMsg.Role == "assistant" {
+			fragment := messageFragmentData{
+				PromptRequestID: id,
+				Org:             org,
+				Repo:            repoName,
+				Messages:        []models.Message{*lastMsg},
+			}
+			if lastMsg.RawResponse != nil {
+				questions, promptReady := extractQuestionsFromRaw(*lastMsg.RawResponse)
+				fragment.Questions = questions
+				fragment.PromptReady = promptReady
+			}
+
+			// Render the message fragment into a wrapper div that replaces #repo-status
+			// and auto-relocates its children to the end of #conversation via inline script.
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprint(w, `<div id="repo-status" style="display:none">`)
+			s.pages["message_fragment.html"].ExecuteTemplate(w, "message_fragment.html", fragment)
+			fmt.Fprint(w, `</div><script>`)
+			fmt.Fprint(w, `(function(){var s=document.getElementById('repo-status');var c=document.getElementById('conversation');while(s.firstChild){c.appendChild(s.firstChild);}s.remove();if(typeof renderMarkdown==='function')renderMarkdown();c.scrollTop=c.scrollHeight;var f=document.getElementById('message-form');if(f){f.querySelector('textarea').disabled=false;f.querySelector('button').disabled=false;}})();`)
+			fmt.Fprint(w, `</script>`)
+			return
+		}
+	}
+
+	s.renderFragment(w, "status_fragment.html", statusFragmentData{
+		Status:   entry.Status,
+		Error:    entry.Error,
+		PollURL:  pollURL,
+		RetryURL: retryURL,
+	})
+}
+
+// backgroundSendMessage processes a pending user message with Claude in a background goroutine.
+// It saves the response to DB and updates the repo status to "responded".
+func (s *Server) backgroundSendMessage(prID int64) {
+	pr, err := s.queries.GetPromptRequest(prID)
+	if err != nil {
+		log.Printf("auto-send: getting prompt request: %v", err)
+		s.setRepoStatus(prID, "error", fmt.Sprintf("Failed to load prompt request: %v", err))
+		return
+	}
+
+	lastMsg, err := s.queries.GetLastMessage(prID)
+	if err != nil || lastMsg.Role != "user" {
+		log.Printf("auto-send: no pending user message for PR %d", prID)
+		s.setRepoStatus(prID, "ready", "")
+		return
+	}
+
+	// Acquire session lock to prevent concurrent Claude calls
+	mu := s.lockSession(pr.SessionID)
+	defer mu.Unlock()
+
+	// Re-check: ensure last message is still from user (not already processed)
+	lastMsg, err = s.queries.GetLastMessage(prID)
+	if err != nil || lastMsg.Role != "user" {
+		s.setRepoStatus(prID, "ready", "")
+		return
+	}
+
+	// Determine resume vs new
+	existingMsgs, err := s.queries.ListMessages(prID)
+	if err != nil {
+		log.Printf("auto-send: listing messages: %v", err)
+		s.setRepoStatus(prID, "error", fmt.Sprintf("Failed to list messages: %v", err))
+		return
+	}
+	resume := false
+	for _, m := range existingMsgs {
+		if m.ID < lastMsg.ID && m.Role == "assistant" {
+			resume = true
+			break
+		}
+	}
+
+	resp, rawJSON, err := claude.SendMessage(context.Background(), pr.SessionID, pr.RepoLocalPath, lastMsg.Content, resume)
+	if err != nil {
+		log.Printf("auto-send: claude error: %v", err)
+		errMsg := fmt.Sprintf("Sorry, I encountered an error: %v", err)
+		s.queries.CreateMessage(prID, "assistant", errMsg, nil)
+		s.setRepoStatus(prID, "responded", "")
+		return
+	}
+
+	if _, err := s.queries.CreateMessage(prID, "assistant", resp.Message, &rawJSON); err != nil {
+		log.Printf("auto-send: saving assistant message: %v", err)
+		s.setRepoStatus(prID, "error", "Failed to save response")
+		return
+	}
+
+	// Set title from response
+	if pr.Title == "" {
+		if resp.GeneratedTitle != "" {
+			s.queries.UpdatePromptRequestTitle(prID, resp.GeneratedTitle)
+		} else if resp.Message != "" {
+			title := resp.Message
+			if len(title) > 60 {
+				title = title[:60] + "..."
+			}
+			s.queries.UpdatePromptRequestTitle(prID, title)
+		}
+	} else if resp.GeneratedTitle != "" {
+		s.queries.UpdatePromptRequestTitle(prID, resp.GeneratedTitle)
+	}
+
+	s.setRepoStatus(prID, "responded", "")
+}
+
+func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	cloned, _ := repo.IsCloned(repoURL)
+	if cloned {
+		s.setRepoStatus(id, "pulling", "")
+	} else {
+		s.setRepoStatus(id, "cloning", "")
+	}
+
+	go s.asyncEnsureCloned(id, repoURL)
+
+	pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
+	retryURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/retry", org, repoName, id)
+
+	s.renderFragment(w, "status_fragment.html", statusFragmentData{
+		Status:   s.getRepoStatus(id).Status,
+		PollURL:  pollURL,
+		RetryURL: retryURL,
+	})
 }
 
 // buildTimeline interleaves messages and revision markers into a single chronological timeline.

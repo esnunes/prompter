@@ -724,6 +724,15 @@ label {
   color: var(--color-text-secondary);
 }
 
+.pr-repo-link {
+  color: var(--color-primary);
+  cursor: pointer;
+}
+
+.pr-repo-link:hover {
+  text-decoration: underline;
+}
+
 /* Revisions */
 .revision {
   padding: var(--space-4);
@@ -811,6 +820,28 @@ label {
   padding-left: var(--space-4);
   border-left: 3px solid var(--color-border);
   color: var(--color-text-secondary);
+}
+
+/* Repo Status */
+.repo-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  margin: var(--space-4) 0;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.repo-status-ready {
+  color: var(--color-success);
+}
+
+.repo-status-error {
+  color: var(--color-error);
+  justify-content: space-between;
 }
 
 /* Utility */

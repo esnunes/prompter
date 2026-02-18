@@ -58,6 +58,15 @@ func EditIssue(ctx context.Context, repoURL string, issueNumber int, body string
 	return nil
 }
 
+// VerifyRepo checks if a repository exists on GitHub using the gh CLI.
+func VerifyRepo(ctx context.Context, org, repo string) error {
+	cmd := exec.CommandContext(ctx, "gh", "api", fmt.Sprintf("repos/%s/%s", org, repo), "--silent")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("repository not found: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 func CheckAuth(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "gh", "auth", "status")
 	if output, err := cmd.CombinedOutput(); err != nil {

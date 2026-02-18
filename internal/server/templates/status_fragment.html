@@ -1,0 +1,36 @@
+{{if eq .Status "cloning"}}
+<div id="repo-status" class="repo-status"
+     hx-get="{{.PollURL}}"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML">
+  <div class="spinner"></div> Cloning repository...
+</div>
+{{else if eq .Status "pulling"}}
+<div id="repo-status" class="repo-status"
+     hx-get="{{.PollURL}}"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML">
+  <div class="spinner"></div> Pulling latest changes...
+</div>
+{{else if eq .Status "processing"}}
+<div id="repo-status" class="repo-status"
+     hx-get="{{.PollURL}}"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML">
+  <div class="spinner"></div> Processing your message...
+</div>
+{{else if eq .Status "ready"}}
+<div id="repo-status" class="repo-status repo-status-ready">
+  Repository ready!
+</div>
+{{else if eq .Status "error"}}
+<div id="repo-status" class="repo-status repo-status-error">
+  <span>Error: {{.Error}}</span>
+  <form hx-post="{{.RetryURL}}"
+        hx-target="#repo-status"
+        hx-swap="outerHTML"
+        style="display:inline;">
+    <button type="submit" class="btn btn-sm btn-secondary">Retry</button>
+  </form>
+</div>
+{{end}}
