@@ -85,7 +85,6 @@ func parsePages() (map[string]*template.Template, error) {
 		"dashboard.html",
 		"new.html",
 		"conversation.html",
-		"published.html",
 		"message_fragment.html",
 	}
 
