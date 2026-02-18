@@ -273,14 +273,17 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
-		// Return just the user message bubble — polling will handle auto-send
+		// Return user message bubble + disable the input form until auto-send completes
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fragment := messageFragmentData{
 			PromptRequestID: id,
 			Org:             org,
 			Repo:            repoName,
 			Messages:        []models.Message{*userMsg},
 		}
-		s.renderFragment(w, "message_fragment.html", fragment)
+		s.pages["message_fragment.html"].ExecuteTemplate(w, "message_fragment.html", fragment)
+		// Disable the message form — it will be re-enabled when the auto-send response arrives
+		fmt.Fprint(w, `<script>(function(){var f=document.getElementById('message-form');if(f){f.querySelector('textarea').disabled=true;f.querySelector('button').disabled=true;}})();</script>`)
 		return
 	}
 
@@ -576,7 +579,7 @@ func (s *Server) handleRepoStatus(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, `<div id="repo-status" style="display:none">`)
 			s.pages["message_fragment.html"].ExecuteTemplate(w, "message_fragment.html", fragment)
 			fmt.Fprint(w, `</div><script>`)
-			fmt.Fprint(w, `(function(){var s=document.getElementById('repo-status');var c=document.getElementById('conversation');while(s.firstChild){c.appendChild(s.firstChild);}s.remove();if(typeof renderMarkdown==='function')renderMarkdown();c.scrollTop=c.scrollHeight;})();`)
+			fmt.Fprint(w, `(function(){var s=document.getElementById('repo-status');var c=document.getElementById('conversation');while(s.firstChild){c.appendChild(s.firstChild);}s.remove();if(typeof renderMarkdown==='function')renderMarkdown();c.scrollTop=c.scrollHeight;var f=document.getElementById('message-form');if(f){f.querySelector('textarea').disabled=false;f.querySelector('button').disabled=false;}})();`)
 			fmt.Fprint(w, `</script>`)
 			return
 		}
