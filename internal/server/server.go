@@ -20,6 +20,12 @@ var templatesFS embed.FS
 //go:embed static
 var staticFS embed.FS
 
+// repoStatusEntry tracks the state of an async clone/pull operation.
+type repoStatusEntry struct {
+	Status string // "cloning", "pulling", "ready", "error"
+	Error  string // error message if Status == "error"
+}
+
 type Server struct {
 	queries    *db.Queries
 	pages      map[string]*template.Template
@@ -27,6 +33,8 @@ type Server struct {
 	ln         net.Listener
 	addr       string
 	sessionMu  sync.Map // per-session mutex: session ID → *sync.Mutex
+	repoStatus sync.Map // per-prompt-request status: prompt request ID (int64) → repoStatusEntry
+	repoMu     sync.Map // per-repo mutex: repo URL (string) → *sync.Mutex
 }
 
 var funcMap = template.FuncMap{
@@ -63,6 +71,8 @@ func New(queries *db.Queries) (*Server, error) {
 	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests/{id}", s.handleShow)
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/messages", s.handleSendMessage)
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/publish", s.handlePublish)
+	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests/{id}/status", s.handleRepoStatus)
+	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/retry", s.handleRetry)
 	mux.HandleFunc("DELETE /github.com/{org}/{repo}/prompt-requests/{id}", s.handleDelete)
 
 	s.httpSrv = &http.Server{Handler: mux}
@@ -86,6 +96,7 @@ func parsePages() (map[string]*template.Template, error) {
 		"repo.html",
 		"conversation.html",
 		"message_fragment.html",
+		"status_fragment.html",
 	}
 
 	pages := make(map[string]*template.Template, len(pageNames))
@@ -159,6 +170,26 @@ func (s *Server) renderPage(w http.ResponseWriter, name string, data any) {
 // call Unlock when done to allow subsequent requests for the same session.
 func (s *Server) lockSession(sessionID string) *sync.Mutex {
 	v, _ := s.sessionMu.LoadOrStore(sessionID, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu
+}
+
+func (s *Server) setRepoStatus(prID int64, status, errMsg string) {
+	s.repoStatus.Store(prID, repoStatusEntry{Status: status, Error: errMsg})
+}
+
+func (s *Server) getRepoStatus(prID int64) repoStatusEntry {
+	v, ok := s.repoStatus.Load(prID)
+	if !ok {
+		return repoStatusEntry{}
+	}
+	return v.(repoStatusEntry)
+}
+
+// lockRepo returns the mutex for a given repo URL. Callers must call Unlock when done.
+func (s *Server) lockRepo(repoURL string) *sync.Mutex {
+	v, _ := s.repoMu.LoadOrStore(repoURL, &sync.Mutex{})
 	mu := v.(*sync.Mutex)
 	mu.Lock()
 	return mu

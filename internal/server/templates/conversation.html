@@ -89,6 +89,16 @@
           </form>
         </div>
         {{end}}
+
+        {{if and .RepoStatus (ne .RepoStatus "ready")}}
+        <div id="repo-status" class="repo-status"
+             hx-get="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/status"
+             hx-trigger="every 2s"
+             hx-swap="outerHTML">
+          <div class="spinner"></div>
+          {{if eq .RepoStatus "cloning"}}Cloning repository...{{else if eq .RepoStatus "pulling"}}Pulling latest changes...{{else}}Preparing repository...{{end}}
+        </div>
+        {{end}}
       </div>
 
       <div class="chat-input" id="message-form"{{if .LastQuestions}} style="display:none"{{end}}>

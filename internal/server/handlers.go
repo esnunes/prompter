@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -107,6 +108,17 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Determine initial status based on whether the repo is already cloned
+	cloned, _ := repo.IsCloned(repoURL)
+	if cloned {
+		s.setRepoStatus(pr.ID, "pulling", "")
+	} else {
+		s.setRepoStatus(pr.ID, "cloning", "")
+	}
+
+	// Launch async clone/pull
+	go s.asyncEnsureCloned(pr.ID, repoURL)
+
 	http.Redirect(w, r, fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d", org, repoName, pr.ID), http.StatusSeeOther)
 }
 
@@ -114,6 +126,7 @@ type conversationData struct {
 	PromptRequest *models.PromptRequest
 	Org           string
 	Repo          string
+	RepoStatus    string // "cloning", "pulling", "ready", "error", or "" (no active operation)
 	Timeline      []timelineItem
 	LastQuestions  []questionData
 	PromptReady   bool
@@ -169,10 +182,23 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check repo status for polling div
+	statusEntry := s.getRepoStatus(id)
+	repoStatus := statusEntry.Status
+	if repoStatus == "" {
+		// Server restart recovery: check filesystem
+		repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
+		cloned, _ := repo.IsCloned(repoURL)
+		if cloned {
+			repoStatus = "ready"
+		}
+	}
+
 	data := conversationData{
 		PromptRequest: pr,
 		Org:           org,
 		Repo:          repoName,
+		RepoStatus:    repoStatus,
 		Timeline:      buildTimeline(messages, revisions),
 		Revisions:     revisions,
 	}
@@ -235,6 +261,26 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	pr, err := s.queries.GetPromptRequest(id)
 	if err != nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	// If repo is not ready, save the message but don't process with Claude yet
+	statusEntry := s.getRepoStatus(id)
+	if statusEntry.Status != "" && statusEntry.Status != "ready" {
+		userMsg, err := s.queries.CreateMessage(id, "user", userMessage, nil)
+		if err != nil {
+			log.Printf("saving user message: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		// Return just the user message bubble — polling will handle auto-send
+		fragment := messageFragmentData{
+			PromptRequestID: id,
+			Org:             org,
+			Repo:            repoName,
+			Messages:        []models.Message{*userMsg},
+		}
+		s.renderFragment(w, "message_fragment.html", fragment)
 		return
 	}
 
@@ -431,6 +477,198 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, fmt.Sprintf("/github.com/%s/%s/prompt-requests", org, repoName), http.StatusSeeOther)
+}
+
+// asyncEnsureCloned runs clone/pull in the background, updating status in sync.Map.
+func (s *Server) asyncEnsureCloned(prID int64, repoURL string) {
+	// Serialize clone/pull operations per repo to prevent concurrent git corruption
+	mu := s.lockRepo(repoURL)
+	defer mu.Unlock()
+
+	_, err := repo.EnsureCloned(context.Background(), repoURL)
+	if err != nil {
+		log.Printf("async clone/pull failed for %s: %v", repoURL, err)
+		s.setRepoStatus(prID, "error", err.Error())
+		return
+	}
+	s.setRepoStatus(prID, "ready", "")
+}
+
+type statusFragmentData struct {
+	Status   string
+	Error    string
+	PollURL  string
+	RetryURL string
+}
+
+func (s *Server) handleRepoStatus(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
+	retryURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/retry", org, repoName, id)
+
+	entry := s.getRepoStatus(id)
+
+	// Server restart recovery: if no status tracked, check filesystem
+	if entry.Status == "" {
+		cloned, _ := repo.IsCloned(repoURL)
+		if cloned {
+			s.setRepoStatus(id, "ready", "")
+			entry = repoStatusEntry{Status: "ready"}
+		} else {
+			// Auto-start clone
+			s.setRepoStatus(id, "cloning", "")
+			go s.asyncEnsureCloned(id, repoURL)
+			entry = repoStatusEntry{Status: "cloning"}
+		}
+	}
+
+	// If ready, check for a pending user message to auto-send
+	if entry.Status == "ready" {
+		lastMsg, err := s.queries.GetLastMessage(id)
+		if err == nil && lastMsg.Role == "user" {
+			// Auto-send: process the pending message with Claude
+			s.autoSendMessage(w, id, org, repoName, lastMsg)
+			return
+		}
+	}
+
+	s.renderFragment(w, "status_fragment.html", statusFragmentData{
+		Status:   entry.Status,
+		Error:    entry.Error,
+		PollURL:  pollURL,
+		RetryURL: retryURL,
+	})
+}
+
+// autoSendMessage processes a pending user message with Claude and returns the response fragment.
+func (s *Server) autoSendMessage(w http.ResponseWriter, prID int64, org, repoName string, userMsg *models.Message) {
+	pr, err := s.queries.GetPromptRequest(prID)
+	if err != nil {
+		log.Printf("auto-send: getting prompt request: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Acquire session lock to prevent concurrent Claude calls
+	mu := s.lockSession(pr.SessionID)
+	defer mu.Unlock()
+
+	// Check if session already has messages (resume vs. new)
+	existingMsgs, err := s.queries.ListMessages(prID)
+	if err != nil {
+		log.Printf("auto-send: listing messages: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Count messages before the pending one to determine resume
+	resume := false
+	for _, m := range existingMsgs {
+		if m.ID < userMsg.ID && m.Role == "assistant" {
+			resume = true
+			break
+		}
+	}
+
+	resp, rawJSON, err := claude.SendMessage(context.Background(), pr.SessionID, pr.RepoLocalPath, userMsg.Content, resume)
+	if err != nil {
+		log.Printf("auto-send: claude error: %v", err)
+		errMsg := fmt.Sprintf("Sorry, I encountered an error: %v", err)
+		s.queries.CreateMessage(prID, "assistant", errMsg, nil)
+
+		fragment := messageFragmentData{
+			PromptRequestID: prID,
+			Org:             org,
+			Repo:            repoName,
+			Messages:        []models.Message{{Role: "assistant", Content: errMsg}},
+		}
+		s.renderFragment(w, "message_fragment.html", fragment)
+		return
+	}
+
+	assistantMsg, err := s.queries.CreateMessage(prID, "assistant", resp.Message, &rawJSON)
+	if err != nil {
+		log.Printf("auto-send: saving assistant message: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Set title from response
+	if pr.Title == "" {
+		if resp.GeneratedTitle != "" {
+			s.queries.UpdatePromptRequestTitle(prID, resp.GeneratedTitle)
+		} else if resp.Message != "" {
+			title := resp.Message
+			if len(title) > 60 {
+				title = title[:60] + "..."
+			}
+			s.queries.UpdatePromptRequestTitle(prID, title)
+		}
+	} else if resp.GeneratedTitle != "" {
+		s.queries.UpdatePromptRequestTitle(prID, resp.GeneratedTitle)
+	}
+
+	fragment := messageFragmentData{
+		PromptRequestID: prID,
+		Org:             org,
+		Repo:            repoName,
+		Messages:        []models.Message{*assistantMsg},
+	}
+
+	for i, q := range resp.Questions {
+		qd := questionData{
+			Header:      q.Header,
+			Text:        q.Text,
+			MultiSelect: q.MultiSelect,
+			Index:       i,
+		}
+		for _, opt := range q.Options {
+			qd.Options = append(qd.Options, optionData{Label: opt.Label, Description: opt.Description})
+		}
+		fragment.Questions = append(fragment.Questions, qd)
+	}
+	fragment.PromptReady = resp.PromptReady
+
+	s.renderFragment(w, "message_fragment.html", fragment)
+}
+
+func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	cloned, _ := repo.IsCloned(repoURL)
+	if cloned {
+		s.setRepoStatus(id, "pulling", "")
+	} else {
+		s.setRepoStatus(id, "cloning", "")
+	}
+
+	go s.asyncEnsureCloned(id, repoURL)
+
+	pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
+	retryURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/retry", org, repoName, id)
+
+	s.renderFragment(w, "status_fragment.html", statusFragmentData{
+		Status:   s.getRepoStatus(id).Status,
+		PollURL:  pollURL,
+		RetryURL: retryURL,
+	})
 }
 
 // buildTimeline interleaves messages and revision markers into a single chronological timeline.
