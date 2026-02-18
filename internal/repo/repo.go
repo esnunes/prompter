@@ -28,6 +28,16 @@ func LocalPath(repoURL string) (string, error) {
 	return filepath.Join(cacheDir, "repos", repoURL), nil
 }
 
+// IsCloned checks if the repository has already been cloned to the local path.
+func IsCloned(repoURL string) (bool, error) {
+	localPath, err := LocalPath(repoURL)
+	if err != nil {
+		return false, err
+	}
+	_, err = os.Stat(filepath.Join(localPath, ".git"))
+	return err == nil, nil
+}
+
 func EnsureCloned(ctx context.Context, repoURL string) (string, error) {
 	localPath, err := LocalPath(repoURL)
 	if err != nil {
@@ -48,10 +58,7 @@ func clone(ctx context.Context, repoURL, localPath string) error {
 
 	cloneURL := "https://" + repoURL + ".git"
 	cmd := exec.CommandContext(ctx, "git", "clone", cloneURL, localPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 
-	fmt.Printf("Cloning %s...\n", repoURL)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("cloning repository: %w", err)
 	}
@@ -61,10 +68,7 @@ func clone(ctx context.Context, repoURL, localPath string) error {
 func pull(ctx context.Context, localPath string) error {
 	cmd := exec.CommandContext(ctx, "git", "pull", "--ff-only")
 	cmd.Dir = localPath
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 
-	fmt.Println("Updating repository...")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("pulling repository (try deleting %s and restarting): %w", localPath, err)
 	}

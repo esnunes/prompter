@@ -10,7 +10,6 @@ import (
 
 	"github.com/esnunes/prompter/internal/db"
 	"github.com/esnunes/prompter/internal/github"
-	"github.com/esnunes/prompter/internal/repo"
 	"github.com/esnunes/prompter/internal/server"
 )
 
@@ -25,29 +24,8 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	if len(os.Args) < 2 {
-		fmt.Println("Prompter — create prompt requests for open source projects")
-		fmt.Println()
-		fmt.Println("Usage: prompter <github.com/owner/repo>")
-		fmt.Println()
-		fmt.Println("Prerequisites:")
-		fmt.Println("  - claude CLI: https://docs.anthropic.com/en/docs/claude-code")
-		fmt.Println("  - gh CLI:     https://cli.github.com")
-		return fmt.Errorf("no repository specified")
-	}
-	repoURL := os.Args[1]
-
-	if err := repo.ValidateURL(repoURL); err != nil {
-		return err
-	}
-
 	if err := checkDependencies(ctx); err != nil {
 		return err
-	}
-
-	localPath, err := repo.EnsureCloned(ctx, repoURL)
-	if err != nil {
-		return fmt.Errorf("setting up repository: %w", err)
 	}
 
 	dbPath, err := db.DBPath()
@@ -61,11 +39,6 @@ func run() error {
 	defer database.Close()
 
 	queries := db.NewQueries(database)
-
-	_, err = queries.UpsertRepository(repoURL, localPath)
-	if err != nil {
-		return fmt.Errorf("registering repository: %w", err)
-	}
 
 	srv, err := server.New(queries)
 	if err != nil {
