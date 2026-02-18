@@ -1,21 +1,29 @@
 {{define "title"}}Prompter — Dashboard{{end}}
 
-{{define "header-actions"}}
-<a href="/new" class="btn btn-primary">New prompt request</a>
-{{end}}
-
 {{define "content"}}
-{{if .PromptRequests}}
 <div class="dashboard-header">
-  <h2>Your prompt requests</h2>
+  <h2>Dashboard</h2>
 </div>
+
+<div class="card mb-4">
+  <form id="repo-nav-form" onsubmit="event.preventDefault(); var v = this.repo_url.value.trim().replace(/^https?:\/\//, ''); if (v) window.location.href = '/' + v + '/prompt-requests';">
+    <label for="repo_url">Go to repository</label>
+    <div style="display:flex;gap:var(--space-3);margin-top:var(--space-2);">
+      <input type="text" name="repo_url" id="repo_url" placeholder="github.com/owner/repo" style="flex:1;">
+      <button type="submit" class="btn btn-primary">Go</button>
+    </div>
+  </form>
+</div>
+
+{{if .PromptRequests}}
+<h3 class="mb-4">Your prompt requests</h3>
 {{range .PromptRequests}}
-<a href="/prompt-requests/{{.ID}}" class="card card-link">
+<a href="/{{.RepoURL}}/prompt-requests/{{.ID}}" class="card card-link">
   <div class="pr-title">
     {{if .Title}}{{.Title}}{{else}}Untitled{{end}}
     <span class="badge {{if eq .Status "published"}}badge-published{{else}}badge-draft{{end}}">{{.Status}}</span>
   </div>
-  <div class="pr-repo">{{.RepoURL}}</div>
+  <div class="pr-repo"><a href="/{{.RepoURL}}/prompt-requests" onclick="event.stopPropagation();">{{.RepoURL}}</a></div>
   <div class="pr-meta">
     <span>{{.MessageCount}} messages</span>
     {{if gt .RevisionCount 0}}<span>{{.RevisionCount}} revisions</span>{{end}}
@@ -26,8 +34,7 @@
 {{else}}
 <div class="empty-state">
   <h2>No prompt requests yet</h2>
-  <p>Create your first prompt request to start an AI-guided conversation about a feature you'd like to see in an open source project.</p>
-  <a href="/new" class="btn btn-primary">Create prompt request</a>
+  <p>Enter a repository URL above to get started.</p>
 </div>
 {{end}}
 {{end}}

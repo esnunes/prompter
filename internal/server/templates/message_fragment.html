@@ -6,7 +6,7 @@
 
 {{if .Questions}}
 <div class="question-block" id="question-form">
-  <form hx-post="/prompt-requests/{{.PromptRequestID}}/messages"
+  <form hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequestID}}/messages"
         hx-target="#conversation"
         hx-swap="beforeend"
         hx-disabled-elt="find button"
@@ -51,7 +51,7 @@
 {{if .PromptReady}}
 <div class="prompt-ready">
   <p>Prompt is ready to publish!</p>
-  <form hx-post="/prompt-requests/{{.PromptRequestID}}/publish"
+  <form hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequestID}}/publish"
         hx-target="body"
         hx-swap="innerHTML"
         hx-disabled-elt="find button">

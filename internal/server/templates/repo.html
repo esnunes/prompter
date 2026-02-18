@@ -1,0 +1,43 @@
+{{define "title"}}{{.RepoURL}} — Prompter{{end}}
+
+{{define "header-actions"}}
+<a href="/" class="btn btn-secondary btn-sm">&larr; Dashboard</a>
+{{end}}
+
+{{define "content"}}
+{{if .Error}}
+<div class="empty-state">
+  <h2>Repository not found</h2>
+  <p>{{.Error}}</p>
+  <a href="/" class="btn btn-secondary">Back to dashboard</a>
+</div>
+{{else}}
+<div class="dashboard-header">
+  <h2>{{.RepoURL}}</h2>
+  <form method="POST" action="/github.com/{{.Org}}/{{.Repo}}/prompt-requests">
+    <button type="submit" class="btn btn-primary">New prompt request</button>
+  </form>
+</div>
+
+{{if .PromptRequests}}
+{{range .PromptRequests}}
+<a href="/github.com/{{$.Org}}/{{$.Repo}}/prompt-requests/{{.ID}}" class="card card-link">
+  <div class="pr-title">
+    {{if .Title}}{{.Title}}{{else}}Untitled{{end}}
+    <span class="badge {{if eq .Status "published"}}badge-published{{else}}badge-draft{{end}}">{{.Status}}</span>
+  </div>
+  <div class="pr-meta">
+    <span>{{.MessageCount}} messages</span>
+    {{if gt .RevisionCount 0}}<span>{{.RevisionCount}} revisions</span>{{end}}
+    <span>{{.CreatedAt.Format "Jan 2, 2006"}}</span>
+  </div>
+</a>
+{{end}}
+{{else}}
+<div class="empty-state">
+  <h2>No prompt requests yet</h2>
+  <p>Create your first prompt request to start an AI-guided conversation about a feature for this repository.</p>
+</div>
+{{end}}
+{{end}}
+{{end}}

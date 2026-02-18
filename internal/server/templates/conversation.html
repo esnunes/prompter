@@ -2,7 +2,7 @@
 
 {{define "header-actions"}}
 <div style="display:flex;gap:var(--space-3);align-items:center;">
-  <span class="pr-repo">{{.PromptRequest.RepoURL}}</span>
+  <a href="/github.com/{{.Org}}/{{.Repo}}/prompt-requests" class="pr-repo">{{.PromptRequest.RepoURL}}</a>
   <span class="badge {{if eq .PromptRequest.Status "published"}}badge-published{{else}}badge-draft{{end}}">{{.PromptRequest.Status}}</span>
   {{if .PromptRequest.IssueURL}}
   <a href="{{deref .PromptRequest.IssueURL}}" target="_blank" class="btn btn-sm btn-secondary">View Issue</a>
@@ -35,7 +35,7 @@
 
         {{if .LastQuestions}}
         <div class="question-block" id="question-form">
-          <form hx-post="/prompt-requests/{{.PromptRequest.ID}}/messages"
+          <form hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/messages"
                 hx-target="#conversation"
                 hx-swap="beforeend"
                 hx-disabled-elt="find button"
@@ -80,7 +80,7 @@
         {{if .PromptReady}}
         <div class="prompt-ready">
           <p>Prompt is ready to publish!</p>
-          <form hx-post="/prompt-requests/{{.PromptRequest.ID}}/publish"
+          <form hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/publish"
                 hx-target="body"
                 hx-swap="innerHTML"
                 hx-disabled-elt="find button">
@@ -93,7 +93,7 @@
 
       <div class="chat-input" id="message-form"{{if .LastQuestions}} style="display:none"{{end}}>
         <form class="chat-form"
-              hx-post="/prompt-requests/{{.PromptRequest.ID}}/messages"
+              hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/messages"
               hx-target="#conversation"
               hx-swap="beforeend"
               hx-disabled-elt="find button, find textarea"

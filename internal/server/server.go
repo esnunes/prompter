@@ -58,12 +58,12 @@ func New(queries *db.Queries) (*Server, error) {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
 	mux.HandleFunc("GET /{$}", s.handleDashboard)
-	mux.HandleFunc("GET /new", s.handleNew)
-	mux.HandleFunc("POST /prompt-requests", s.handleCreate)
-	mux.HandleFunc("GET /prompt-requests/{id}", s.handleShow)
-	mux.HandleFunc("POST /prompt-requests/{id}/messages", s.handleSendMessage)
-	mux.HandleFunc("POST /prompt-requests/{id}/publish", s.handlePublish)
-	mux.HandleFunc("DELETE /prompt-requests/{id}", s.handleDelete)
+	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests", s.handleRepoPage)
+	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests", s.handleCreate)
+	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests/{id}", s.handleShow)
+	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/messages", s.handleSendMessage)
+	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/publish", s.handlePublish)
+	mux.HandleFunc("DELETE /github.com/{org}/{repo}/prompt-requests/{id}", s.handleDelete)
 
 	s.httpSrv = &http.Server{Handler: mux}
 	return s, nil
@@ -83,7 +83,7 @@ func parsePages() (map[string]*template.Template, error) {
 
 	pageNames := []string{
 		"dashboard.html",
-		"new.html",
+		"repo.html",
 		"conversation.html",
 		"message_fragment.html",
 	}

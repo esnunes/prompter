@@ -11,6 +11,7 @@ import (
 	"github.com/esnunes/prompter/internal/claude"
 	"github.com/esnunes/prompter/internal/github"
 	"github.com/esnunes/prompter/internal/models"
+	"github.com/esnunes/prompter/internal/repo"
 
 	"github.com/google/uuid"
 )
@@ -29,53 +30,90 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	s.renderPage(w, "dashboard.html", dashboardData{PromptRequests: prs})
 }
 
-type newData struct {
-	Repositories []models.Repository
+type repoData struct {
+	RepoURL        string
+	Org            string
+	Repo           string
+	Error          string
+	PromptRequests []models.PromptRequest
 }
 
-func (s *Server) handleNew(w http.ResponseWriter, r *http.Request) {
-	repos, err := s.queries.ListRepositories()
+func (s *Server) handleRepoPage(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
+
+	if err := repo.ValidateURL(repoURL); err != nil {
+		s.renderPage(w, "repo.html", repoData{
+			RepoURL: repoURL,
+			Org:     org,
+			Repo:    repoName,
+			Error:   "Invalid repository URL format.",
+		})
+		return
+	}
+
+	// Verify repo exists on GitHub
+	if err := github.VerifyRepo(r.Context(), org, repoName); err != nil {
+		s.renderPage(w, "repo.html", repoData{
+			RepoURL: repoURL,
+			Org:     org,
+			Repo:    repoName,
+			Error:   fmt.Sprintf("This repository doesn't exist on GitHub or is not accessible."),
+		})
+		return
+	}
+
+	prs, err := s.queries.ListPromptRequestsByRepoURL(repoURL)
 	if err != nil {
-		log.Printf("listing repositories: %v", err)
+		log.Printf("listing prompt requests for repo: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	s.renderPage(w, "new.html", newData{Repositories: repos})
+
+	s.renderPage(w, "repo.html", repoData{
+		RepoURL:        repoURL,
+		Org:            org,
+		Repo:           repoName,
+		PromptRequests: prs,
+	})
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
 
-	repoID, err := strconv.ParseInt(r.FormValue("repo_id"), 10, 64)
+	// Compute local path and upsert repo
+	localPath, err := repo.LocalPath(repoURL)
 	if err != nil {
-		http.Error(w, "Invalid repository", http.StatusBadRequest)
+		log.Printf("computing local path: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	title := r.FormValue("title")
-	sessionID := uuid.New().String()
+	repoRecord, err := s.queries.UpsertRepository(repoURL, localPath)
+	if err != nil {
+		log.Printf("upserting repository: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 
-	pr, err := s.queries.CreatePromptRequest(repoID, sessionID)
+	sessionID := uuid.New().String()
+	pr, err := s.queries.CreatePromptRequest(repoRecord.ID, sessionID)
 	if err != nil {
 		log.Printf("creating prompt request: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	if title != "" {
-		if err := s.queries.UpdatePromptRequestTitle(pr.ID, title); err != nil {
-			log.Printf("updating title: %v", err)
-		}
-	}
-
-	http.Redirect(w, r, fmt.Sprintf("/prompt-requests/%d", pr.ID), http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d", org, repoName, pr.ID), http.StatusSeeOther)
 }
 
 type conversationData struct {
 	PromptRequest *models.PromptRequest
+	Org           string
+	Repo          string
 	Timeline      []timelineItem
 	LastQuestions  []questionData
 	PromptReady   bool
@@ -102,6 +140,9 @@ type optionData struct {
 }
 
 func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -130,6 +171,8 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 
 	data := conversationData{
 		PromptRequest: pr,
+		Org:           org,
+		Repo:          repoName,
 		Timeline:      buildTimeline(messages, revisions),
 		Revisions:     revisions,
 	}
@@ -157,12 +200,17 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 
 type messageFragmentData struct {
 	PromptRequestID int64
+	Org             string
+	Repo            string
 	Messages        []models.Message
 	Questions       []questionData
 	PromptReady     bool
 }
 
 func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -221,6 +269,8 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 		fragment := messageFragmentData{
 			PromptRequestID: id,
+			Org:             org,
+			Repo:            repoName,
 			Messages: []models.Message{
 				*userMsg,
 				{Role: "assistant", Content: errMsg},
@@ -257,6 +307,8 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	// Build fragment response
 	fragment := messageFragmentData{
 		PromptRequestID: id,
+		Org:             org,
+		Repo:            repoName,
 		Messages:        []models.Message{*userMsg, *assistantMsg},
 	}
 
@@ -282,6 +334,9 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -356,10 +411,13 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Redirect to the published view
-	http.Redirect(w, r, fmt.Sprintf("/prompt-requests/%d", id), http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d", org, repoName, id), http.StatusSeeOther)
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -372,7 +430,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/github.com/%s/%s/prompt-requests", org, repoName), http.StatusSeeOther)
 }
 
 // buildTimeline interleaves messages and revision markers into a single chronological timeline.
