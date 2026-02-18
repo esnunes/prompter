@@ -60,7 +60,7 @@ func (s *Server) handleRepoPage(w http.ResponseWriter, r *http.Request) {
 			RepoURL: repoURL,
 			Org:     org,
 			Repo:    repoName,
-			Error:   fmt.Sprintf("This repository doesn't exist on GitHub or is not accessible."),
+			Error:   "This repository doesn't exist on GitHub or is not accessible.",
 		})
 		return
 	}
@@ -456,8 +456,15 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		log.Printf("updating status: %v", err)
 	}
 
-	// Redirect to the published view
-	http.Redirect(w, r, fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d", org, repoName, id), http.StatusSeeOther)
+	// Use HX-Redirect for HTMX requests to trigger a full page navigation
+	// (regular http.Redirect would be followed inline, producing malformed DOM)
+	redirectURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d", org, repoName, id)
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Redirect", redirectURL)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
@@ -535,8 +542,42 @@ func (s *Server) handleRepoStatus(w http.ResponseWriter, r *http.Request) {
 	if entry.Status == "ready" {
 		lastMsg, err := s.queries.GetLastMessage(id)
 		if err == nil && lastMsg.Role == "user" {
-			// Auto-send: process the pending message with Claude
-			s.autoSendMessage(w, id, org, repoName, lastMsg)
+			// Atomically transition to "processing" to prevent duplicate Claude calls
+			old := repoStatusEntry{Status: "ready"}
+			if s.repoStatus.CompareAndSwap(id, old, repoStatusEntry{Status: "processing"}) {
+				go s.backgroundSendMessage(id)
+			}
+			entry = repoStatusEntry{Status: "processing"}
+		}
+	}
+
+	// If responded, deliver the assistant message and stop polling.
+	// We replace #repo-status with the response content plus a script that
+	// moves the messages into #conversation at the correct position.
+	if entry.Status == "responded" {
+		s.repoStatus.Delete(id)
+		lastMsg, err := s.queries.GetLastMessage(id)
+		if err == nil && lastMsg.Role == "assistant" {
+			fragment := messageFragmentData{
+				PromptRequestID: id,
+				Org:             org,
+				Repo:            repoName,
+				Messages:        []models.Message{*lastMsg},
+			}
+			if lastMsg.RawResponse != nil {
+				questions, promptReady := extractQuestionsFromRaw(*lastMsg.RawResponse)
+				fragment.Questions = questions
+				fragment.PromptReady = promptReady
+			}
+
+			// Render the message fragment into a wrapper div that replaces #repo-status
+			// and auto-relocates its children to the end of #conversation via inline script.
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprint(w, `<div id="repo-status" style="display:none">`)
+			s.pages["message_fragment.html"].ExecuteTemplate(w, "message_fragment.html", fragment)
+			fmt.Fprint(w, `</div><script>`)
+			fmt.Fprint(w, `(function(){var s=document.getElementById('repo-status');var c=document.getElementById('conversation');while(s.firstChild){c.appendChild(s.firstChild);}s.remove();if(typeof renderMarkdown==='function')renderMarkdown();c.scrollTop=c.scrollHeight;})();`)
+			fmt.Fprint(w, `</script>`)
 			return
 		}
 	}
@@ -549,12 +590,20 @@ func (s *Server) handleRepoStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// autoSendMessage processes a pending user message with Claude and returns the response fragment.
-func (s *Server) autoSendMessage(w http.ResponseWriter, prID int64, org, repoName string, userMsg *models.Message) {
+// backgroundSendMessage processes a pending user message with Claude in a background goroutine.
+// It saves the response to DB and updates the repo status to "responded".
+func (s *Server) backgroundSendMessage(prID int64) {
 	pr, err := s.queries.GetPromptRequest(prID)
 	if err != nil {
 		log.Printf("auto-send: getting prompt request: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		s.setRepoStatus(prID, "error", fmt.Sprintf("Failed to load prompt request: %v", err))
+		return
+	}
+
+	lastMsg, err := s.queries.GetLastMessage(prID)
+	if err != nil || lastMsg.Role != "user" {
+		log.Printf("auto-send: no pending user message for PR %d", prID)
+		s.setRepoStatus(prID, "ready", "")
 		return
 	}
 
@@ -562,43 +611,40 @@ func (s *Server) autoSendMessage(w http.ResponseWriter, prID int64, org, repoNam
 	mu := s.lockSession(pr.SessionID)
 	defer mu.Unlock()
 
-	// Check if session already has messages (resume vs. new)
-	existingMsgs, err := s.queries.ListMessages(prID)
-	if err != nil {
-		log.Printf("auto-send: listing messages: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	// Re-check: ensure last message is still from user (not already processed)
+	lastMsg, err = s.queries.GetLastMessage(prID)
+	if err != nil || lastMsg.Role != "user" {
+		s.setRepoStatus(prID, "ready", "")
 		return
 	}
 
-	// Count messages before the pending one to determine resume
+	// Determine resume vs new
+	existingMsgs, err := s.queries.ListMessages(prID)
+	if err != nil {
+		log.Printf("auto-send: listing messages: %v", err)
+		s.setRepoStatus(prID, "error", fmt.Sprintf("Failed to list messages: %v", err))
+		return
+	}
 	resume := false
 	for _, m := range existingMsgs {
-		if m.ID < userMsg.ID && m.Role == "assistant" {
+		if m.ID < lastMsg.ID && m.Role == "assistant" {
 			resume = true
 			break
 		}
 	}
 
-	resp, rawJSON, err := claude.SendMessage(context.Background(), pr.SessionID, pr.RepoLocalPath, userMsg.Content, resume)
+	resp, rawJSON, err := claude.SendMessage(context.Background(), pr.SessionID, pr.RepoLocalPath, lastMsg.Content, resume)
 	if err != nil {
 		log.Printf("auto-send: claude error: %v", err)
 		errMsg := fmt.Sprintf("Sorry, I encountered an error: %v", err)
 		s.queries.CreateMessage(prID, "assistant", errMsg, nil)
-
-		fragment := messageFragmentData{
-			PromptRequestID: prID,
-			Org:             org,
-			Repo:            repoName,
-			Messages:        []models.Message{{Role: "assistant", Content: errMsg}},
-		}
-		s.renderFragment(w, "message_fragment.html", fragment)
+		s.setRepoStatus(prID, "responded", "")
 		return
 	}
 
-	assistantMsg, err := s.queries.CreateMessage(prID, "assistant", resp.Message, &rawJSON)
-	if err != nil {
+	if _, err := s.queries.CreateMessage(prID, "assistant", resp.Message, &rawJSON); err != nil {
 		log.Printf("auto-send: saving assistant message: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		s.setRepoStatus(prID, "error", "Failed to save response")
 		return
 	}
 
@@ -617,28 +663,7 @@ func (s *Server) autoSendMessage(w http.ResponseWriter, prID int64, org, repoNam
 		s.queries.UpdatePromptRequestTitle(prID, resp.GeneratedTitle)
 	}
 
-	fragment := messageFragmentData{
-		PromptRequestID: prID,
-		Org:             org,
-		Repo:            repoName,
-		Messages:        []models.Message{*assistantMsg},
-	}
-
-	for i, q := range resp.Questions {
-		qd := questionData{
-			Header:      q.Header,
-			Text:        q.Text,
-			MultiSelect: q.MultiSelect,
-			Index:       i,
-		}
-		for _, opt := range q.Options {
-			qd.Options = append(qd.Options, optionData{Label: opt.Label, Description: opt.Description})
-		}
-		fragment.Questions = append(fragment.Questions, qd)
-	}
-	fragment.PromptReady = resp.PromptReady
-
-	s.renderFragment(w, "message_fragment.html", fragment)
+	s.setRepoStatus(prID, "responded", "")
 }
 
 func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {

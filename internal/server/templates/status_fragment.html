@@ -12,6 +12,13 @@
      hx-swap="outerHTML">
   <div class="spinner"></div> Pulling latest changes...
 </div>
+{{else if eq .Status "processing"}}
+<div id="repo-status" class="repo-status"
+     hx-get="{{.PollURL}}"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML">
+  <div class="spinner"></div> Processing your message...
+</div>
 {{else if eq .Status "ready"}}
 <div id="repo-status" class="repo-status repo-status-ready">
   Repository ready!
