@@ -23,7 +23,7 @@
     {{if .Title}}{{.Title}}{{else}}Untitled{{end}}
     <span class="badge {{if eq .Status "published"}}badge-published{{else}}badge-draft{{end}}">{{.Status}}</span>
   </div>
-  <div class="pr-repo"><a href="/{{.RepoURL}}/prompt-requests" onclick="event.stopPropagation();">{{.RepoURL}}</a></div>
+  <div class="pr-repo"><span class="pr-repo-link" onclick="event.preventDefault(); event.stopPropagation(); window.location.href='/{{.RepoURL}}/prompt-requests';">{{.RepoURL}}</span></div>
   <div class="pr-meta">
     <span>{{.MessageCount}} messages</span>
     {{if gt .RevisionCount 0}}<span>{{.RevisionCount}} revisions</span>{{end}}
