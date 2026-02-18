@@ -42,5 +42,6 @@ type Revision struct {
 	ID              int64
 	PromptRequestID int64
 	Content         string
+	AfterMessageID  *int64
 	PublishedAt     time.Time
 }

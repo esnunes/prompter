@@ -4,86 +4,127 @@
 <div style="display:flex;gap:var(--space-3);align-items:center;">
   <span class="pr-repo">{{.PromptRequest.RepoURL}}</span>
   <span class="badge {{if eq .PromptRequest.Status "published"}}badge-published{{else}}badge-draft{{end}}">{{.PromptRequest.Status}}</span>
+  {{if .PromptRequest.IssueURL}}
+  <a href="{{deref .PromptRequest.IssueURL}}" target="_blank" class="btn btn-sm btn-secondary">View Issue</a>
+  {{end}}
 </div>
 {{end}}
 
 {{define "content"}}
-<div class="chat-container">
-  <div class="chat-messages" id="conversation">
-    {{range .Messages}}
-    <div class="message message-{{.Role}}">
-      <div class="message-bubble">{{.Content}}</div>
-    </div>
-    {{end}}
-
-    {{if .LastQuestions}}
-    <div class="question-block" id="question-form">
-      <form hx-post="/prompt-requests/{{.PromptRequest.ID}}/messages"
-            hx-target="#conversation"
-            hx-swap="beforeend"
-            hx-disabled-elt="find button"
-            hx-on::after-request="this.closest('.question-block').remove(); document.getElementById('message-form').style.display = ''; document.getElementById('conversation').scrollTop = document.getElementById('conversation').scrollHeight;">
-        {{range $q := .LastQuestions}}
-        <div class="question-group">
-          {{if $q.Header}}<span class="question-header">{{$q.Header}}</span>{{end}}
-          <h4>{{$q.Text}}</h4>
-          <input type="hidden" name="q_{{$q.Index}}_header" value="{{$q.Header}}">
-          <div class="options-list">
-            {{range $q.Options}}
-            <label class="option-item">
-              {{if $q.MultiSelect}}<input type="checkbox" name="q_{{$q.Index}}" value="{{.Label}}">
-              {{else}}<input type="radio" name="q_{{$q.Index}}" value="{{.Label}}">
-              {{end}}
-              <div>
-                <div class="option-label">{{.Label}}</div>
-                <div class="option-description">{{.Description}}</div>
-              </div>
-            </label>
-            {{end}}
-            <label class="option-item other-option">
-              {{if $q.MultiSelect}}<input type="checkbox" name="q_{{$q.Index}}" value="__other__">
-              {{else}}<input type="radio" name="q_{{$q.Index}}" value="__other__">
-              {{end}}
-              <div>
-                <div class="option-label">Other</div>
-                <input type="text" name="q_{{$q.Index}}_other" class="other-input" placeholder="Type your answer..." maxlength="500">
-              </div>
-            </label>
+<div class="conversation-wrapper">
+  <div class="conversation-main">
+    <div class="chat-container">
+      <div class="chat-messages" id="conversation">
+        {{range .Timeline}}
+          {{if eq .Type "message"}}
+          <div class="message message-{{.Message.Role}}">
+            <div class="message-bubble">{{.Message.Content}}</div>
           </div>
+          {{else if eq .Type "revision-marker"}}
+          <div class="submission-marker" id="revision-{{.Revision.ID}}">
+            <details class="submission-marker-details">
+              <summary class="submission-marker-text">
+                Published to GitHub — Revision {{.Revision.ID}}
+                <time>{{.Revision.PublishedAt.Format "Jan 2, 2006 3:04 PM"}}</time>
+              </summary>
+              <div class="revision-content">{{.Revision.Content}}</div>
+            </details>
+          </div>
+          {{end}}
+        {{end}}
+
+        {{if .LastQuestions}}
+        <div class="question-block" id="question-form">
+          <form hx-post="/prompt-requests/{{.PromptRequest.ID}}/messages"
+                hx-target="#conversation"
+                hx-swap="beforeend"
+                hx-disabled-elt="find button"
+                hx-on::after-request="this.closest('.question-block').remove(); document.getElementById('message-form').style.display = ''; document.getElementById('conversation').scrollTop = document.getElementById('conversation').scrollHeight;">
+            {{range $q := .LastQuestions}}
+            <div class="question-group">
+              {{if $q.Header}}<span class="question-header">{{$q.Header}}</span>{{end}}
+              <h4>{{$q.Text}}</h4>
+              <input type="hidden" name="q_{{$q.Index}}_header" value="{{$q.Header}}">
+              <div class="options-list">
+                {{range $q.Options}}
+                <label class="option-item">
+                  {{if $q.MultiSelect}}<input type="checkbox" name="q_{{$q.Index}}" value="{{.Label}}">
+                  {{else}}<input type="radio" name="q_{{$q.Index}}" value="{{.Label}}">
+                  {{end}}
+                  <div>
+                    <div class="option-label">{{.Label}}</div>
+                    <div class="option-description">{{.Description}}</div>
+                  </div>
+                </label>
+                {{end}}
+                <label class="option-item other-option">
+                  {{if $q.MultiSelect}}<input type="checkbox" name="q_{{$q.Index}}" value="__other__">
+                  {{else}}<input type="radio" name="q_{{$q.Index}}" value="__other__">
+                  {{end}}
+                  <div>
+                    <div class="option-label">Other</div>
+                    <input type="text" name="q_{{$q.Index}}_other" class="other-input" placeholder="Type your answer..." maxlength="500">
+                  </div>
+                </label>
+              </div>
+            </div>
+            {{end}}
+            <div class="mt-4" style="display:flex;gap:var(--space-3);">
+              <button type="submit" class="btn btn-primary">Answer</button>
+            </div>
+            <div class="htmx-indicator"><div class="spinner"></div> Thinking...</div>
+          </form>
         </div>
         {{end}}
-        <div class="mt-4" style="display:flex;gap:var(--space-3);">
-          <button type="submit" class="btn btn-primary">Answer</button>
+
+        {{if .PromptReady}}
+        <div class="prompt-ready">
+          <p>Prompt is ready to publish!</p>
+          <form hx-post="/prompt-requests/{{.PromptRequest.ID}}/publish"
+                hx-target="body"
+                hx-swap="innerHTML"
+                hx-disabled-elt="find button">
+            <button type="submit" class="btn btn-primary">Publish to GitHub</button>
+            <div class="htmx-indicator"><div class="spinner"></div> Publishing...</div>
+          </form>
         </div>
-        <div class="htmx-indicator"><div class="spinner"></div> Thinking...</div>
-      </form>
-    </div>
-    {{end}}
+        {{end}}
+      </div>
 
-    {{if .PromptReady}}
-    <div class="prompt-ready">
-      <p>Prompt is ready to publish!</p>
-      <form hx-post="/prompt-requests/{{.PromptRequest.ID}}/publish"
-            hx-target="body"
-            hx-swap="innerHTML">
-        <button type="submit" class="btn btn-primary">Publish to GitHub</button>
-        <div class="htmx-indicator"><div class="spinner"></div> Publishing...</div>
-      </form>
+      <div class="chat-input" id="message-form"{{if .LastQuestions}} style="display:none"{{end}}>
+        <form class="chat-form"
+              hx-post="/prompt-requests/{{.PromptRequest.ID}}/messages"
+              hx-target="#conversation"
+              hx-swap="beforeend"
+              hx-disabled-elt="find button, find textarea"
+              hx-on::after-request="this.reset(); document.getElementById('conversation').scrollTop = document.getElementById('conversation').scrollHeight;">
+          <textarea name="message" placeholder="Describe the feature you'd like..." rows="2" required></textarea>
+          <button type="submit" class="btn btn-primary">Send</button>
+          <div class="htmx-indicator"><div class="spinner"></div></div>
+        </form>
+      </div>
     </div>
-    {{end}}
   </div>
 
-  <div class="chat-input" id="message-form"{{if .LastQuestions}} style="display:none"{{end}}>
-    <form class="chat-form"
-          hx-post="/prompt-requests/{{.PromptRequest.ID}}/messages"
-          hx-target="#conversation"
-          hx-swap="beforeend"
-          hx-disabled-elt="find button, find textarea"
-          hx-on::after-request="this.reset(); document.getElementById('conversation').scrollTop = document.getElementById('conversation').scrollHeight;">
-      <textarea name="message" placeholder="Describe the feature you'd like..." rows="2" required></textarea>
-      <button type="submit" class="btn btn-primary">Send</button>
-      <div class="htmx-indicator"><div class="spinner"></div></div>
-    </form>
-  </div>
+  <aside class="revision-sidebar">
+    <h3 class="sidebar-heading">Revisions</h3>
+    {{if .Revisions}}
+      <ul class="revision-list">
+        {{range .Revisions}}
+        <li class="revision-list-item">
+          <a href="#revision-{{.ID}}" class="revision-link">
+            <span class="revision-number">Revision {{.ID}}</span>
+            <time class="revision-time text-sm text-secondary">{{.PublishedAt.Format "Jan 2, 2006 3:04 PM"}}</time>
+          </a>
+        </li>
+        {{end}}
+      </ul>
+      {{if $.PromptRequest.IssueURL}}
+      <a href="{{deref $.PromptRequest.IssueURL}}" target="_blank" class="sidebar-issue-link">View GitHub Issue</a>
+      {{end}}
+    {{else}}
+      <p class="text-secondary text-sm">Not published yet</p>
+    {{end}}
+  </aside>
 </div>
 {{end}}

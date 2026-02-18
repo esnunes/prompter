@@ -76,9 +76,16 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 type conversationData struct {
 	PromptRequest *models.PromptRequest
-	Messages      []models.Message
+	Timeline      []timelineItem
 	LastQuestions  []questionData
 	PromptReady   bool
+	Revisions     []models.Revision
+}
+
+type timelineItem struct {
+	Type     string // "message" or "revision-marker"
+	Message  *models.Message
+	Revision *models.Revision
 }
 
 type questionData struct {
@@ -114,47 +121,38 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if pr.Status == "published" {
-		revisions, err := s.queries.ListRevisions(id)
-		if err != nil {
-			log.Printf("listing revisions: %v", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-		s.renderPage(w, "published.html", publishedData{
-			PromptRequest: pr,
-			Messages:      messages,
-			Revisions:     revisions,
-		})
+	revisions, err := s.queries.ListRevisions(id)
+	if err != nil {
+		log.Printf("listing revisions: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	// Build conversation data with last question if present
 	data := conversationData{
 		PromptRequest: pr,
-		Messages:      messages,
+		Timeline:      buildTimeline(messages, revisions),
+		Revisions:     revisions,
 	}
 
-	// Check the last assistant message for a pending question
+	// Check the last assistant message for pending questions / prompt ready
 	if len(messages) > 0 {
 		last := messages[len(messages)-1]
 		if last.Role == "assistant" && last.RawResponse != nil {
-			if questions, promptReady := extractQuestionsFromRaw(*last.RawResponse); len(questions) > 0 {
-				data.LastQuestions = questions
-				data.PromptReady = promptReady
-			} else {
-				data.PromptReady = promptReady
+			questions, promptReady := extractQuestionsFromRaw(*last.RawResponse)
+			data.LastQuestions = questions
+			data.PromptReady = promptReady
+		}
+
+		// Suppress prompt_ready if the last message was already published
+		if data.PromptReady && len(revisions) > 0 {
+			latestRev := revisions[len(revisions)-1] // ordered by published_at ASC
+			if latestRev.AfterMessageID != nil && last.ID <= *latestRev.AfterMessageID {
+				data.PromptReady = false
 			}
 		}
 	}
 
 	s.renderPage(w, "conversation.html", data)
-}
-
-type publishedData struct {
-	PromptRequest *models.PromptRequest
-	Messages      []models.Message
-	Revisions     []models.Revision
 }
 
 type messageFragmentData struct {
@@ -343,8 +341,12 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Create revision
-	if _, err := s.queries.CreateRevision(id, body); err != nil {
+	// Create revision, linking it to the last message for inline marker placement
+	var afterMsgID *int64
+	if lastMsg, err := s.queries.GetLastMessage(id); err == nil {
+		afterMsgID = &lastMsg.ID
+	}
+	if _, err := s.queries.CreateRevision(id, body, afterMsgID); err != nil {
 		log.Printf("creating revision: %v", err)
 	}
 
@@ -371,6 +373,35 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// buildTimeline interleaves messages and revision markers into a single chronological timeline.
+func buildTimeline(messages []models.Message, revisions []models.Revision) []timelineItem {
+	// Map afterMessageID → revisions for O(1) lookup
+	revByMsg := map[int64][]models.Revision{}
+	var orphanRevs []models.Revision
+	for _, rev := range revisions {
+		if rev.AfterMessageID != nil {
+			revByMsg[*rev.AfterMessageID] = append(revByMsg[*rev.AfterMessageID], rev)
+		} else {
+			orphanRevs = append(orphanRevs, rev)
+		}
+	}
+
+	var items []timelineItem
+	for i := range messages {
+		items = append(items, timelineItem{Type: "message", Message: &messages[i]})
+		if revs, ok := revByMsg[messages[i].ID]; ok {
+			for j := range revs {
+				items = append(items, timelineItem{Type: "revision-marker", Revision: &revs[j]})
+			}
+		}
+	}
+	// Append orphan revisions (legacy data with NULL after_message_id)
+	for i := range orphanRevs {
+		items = append(items, timelineItem{Type: "revision-marker", Revision: &orphanRevs[i]})
+	}
+	return items
 }
 
 // extractQuestionsFromRaw parses the raw Claude response to find pending questions.

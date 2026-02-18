@@ -74,5 +74,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("running schema migration: %w", err)
 	}
+
+	// Migration: add after_message_id to revisions (nullable, safe for existing rows).
+	// SQLite ALTER TABLE doesn't support IF NOT EXISTS, so ignore "duplicate column" errors.
+	db.Exec(`ALTER TABLE revisions ADD COLUMN after_message_id INTEGER REFERENCES messages(id)`)
+
 	return db, nil
 }

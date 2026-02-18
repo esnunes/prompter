@@ -286,10 +286,10 @@ func (q *Queries) ListMessages(promptRequestID int64) ([]models.Message, error) 
 
 // Revisions
 
-func (q *Queries) CreateRevision(promptRequestID int64, content string) (*models.Revision, error) {
+func (q *Queries) CreateRevision(promptRequestID int64, content string, afterMessageID *int64) (*models.Revision, error) {
 	res, err := q.db.Exec(
-		`INSERT INTO revisions (prompt_request_id, content) VALUES (?, ?)`,
-		promptRequestID, content,
+		`INSERT INTO revisions (prompt_request_id, content, after_message_id) VALUES (?, ?, ?)`,
+		promptRequestID, content, afterMessageID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("creating revision: %w", err)
@@ -298,8 +298,8 @@ func (q *Queries) CreateRevision(promptRequestID int64, content string) (*models
 	r := &models.Revision{}
 	var publishedAt string
 	err = q.db.QueryRow(
-		`SELECT id, prompt_request_id, content, published_at FROM revisions WHERE id = ?`, id,
-	).Scan(&r.ID, &r.PromptRequestID, &r.Content, &publishedAt)
+		`SELECT id, prompt_request_id, content, after_message_id, published_at FROM revisions WHERE id = ?`, id,
+	).Scan(&r.ID, &r.PromptRequestID, &r.Content, &r.AfterMessageID, &publishedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting revision: %w", err)
 	}
@@ -309,8 +309,8 @@ func (q *Queries) CreateRevision(promptRequestID int64, content string) (*models
 
 func (q *Queries) ListRevisions(promptRequestID int64) ([]models.Revision, error) {
 	rows, err := q.db.Query(
-		`SELECT id, prompt_request_id, content, published_at
-		 FROM revisions WHERE prompt_request_id = ? ORDER BY published_at DESC`, promptRequestID,
+		`SELECT id, prompt_request_id, content, after_message_id, published_at
+		 FROM revisions WHERE prompt_request_id = ? ORDER BY published_at ASC`, promptRequestID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing revisions: %w", err)
@@ -321,11 +321,25 @@ func (q *Queries) ListRevisions(promptRequestID int64) ([]models.Revision, error
 	for rows.Next() {
 		var r models.Revision
 		var publishedAt string
-		if err := rows.Scan(&r.ID, &r.PromptRequestID, &r.Content, &publishedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.PromptRequestID, &r.Content, &r.AfterMessageID, &publishedAt); err != nil {
 			return nil, fmt.Errorf("scanning revision: %w", err)
 		}
 		r.PublishedAt, _ = time.Parse(time.DateTime, publishedAt)
 		results = append(results, r)
 	}
 	return results, rows.Err()
+}
+
+func (q *Queries) GetLastMessage(promptRequestID int64) (*models.Message, error) {
+	m := &models.Message{}
+	var createdAt string
+	err := q.db.QueryRow(
+		`SELECT id, prompt_request_id, role, content, raw_response, created_at
+		 FROM messages WHERE prompt_request_id = ? ORDER BY created_at DESC LIMIT 1`, promptRequestID,
+	).Scan(&m.ID, &m.PromptRequestID, &m.Role, &m.Content, &m.RawResponse, &createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("getting last message: %w", err)
+	}
+	m.CreatedAt, _ = time.Parse(time.DateTime, createdAt)
+	return m, nil
 }
