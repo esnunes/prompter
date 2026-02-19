@@ -42,12 +42,13 @@ a:hover {
 .header {
   background: var(--color-background);
   border-bottom: var(--border-width) solid var(--color-border);
-  padding: var(--space-4) var(--space-6);
+  padding: var(--space-4) 0;
 }
 
 .header-inner {
   max-width: var(--size-container);
   margin: 0 auto;
+  padding: 0 var(--space-4);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -241,6 +242,10 @@ label {
 }
 
 /* Two-column conversation layout */
+body:has(.conversation-wrapper) .header-inner {
+  max-width: calc(var(--size-container) + var(--size-sidebar) + var(--space-4));
+}
+
 .container:has(.conversation-wrapper) {
   max-width: calc(var(--size-container) + var(--size-sidebar) + var(--space-4));
 }
@@ -372,6 +377,10 @@ label {
 
 /* Responsive: collapse sidebar on narrow screens */
 @media (max-width: 768px) {
+  body:has(.conversation-wrapper) .header-inner {
+    max-width: var(--size-container);
+  }
+
   .container:has(.conversation-wrapper) {
     max-width: var(--size-container);
   }
