@@ -22,11 +22,13 @@ type PromptRequest struct {
 	UpdatedAt    time.Time
 
 	// Joined fields (not stored directly)
-	RepoURL        string
-	RepoLocalPath  string
-	MessageCount   int
-	RevisionCount  int
-	LatestRevision *time.Time
+	RepoURL           string
+	RepoLocalPath     string
+	MessageCount      int
+	RevisionCount     int
+	LatestRevision    *time.Time
+	LastViewedAt      *time.Time
+	LatestAssistantAt *time.Time
 }
 
 type Message struct {

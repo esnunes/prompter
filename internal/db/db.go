@@ -79,5 +79,8 @@ func Open(dbPath string) (*sql.DB, error) {
 	// SQLite ALTER TABLE doesn't support IF NOT EXISTS, so ignore "duplicate column" errors.
 	db.Exec(`ALTER TABLE revisions ADD COLUMN after_message_id INTEGER REFERENCES messages(id)`)
 
+	// Migration: add last_viewed_at for unread tracking in prompt list sidebar.
+	db.Exec(`ALTER TABLE prompt_requests ADD COLUMN last_viewed_at TEXT`)
+
 	return db, nil
 }

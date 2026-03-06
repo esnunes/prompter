@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/esnunes/prompter/internal/claude"
 	"github.com/esnunes/prompter/internal/github"
@@ -17,7 +18,34 @@ import (
 	"github.com/google/uuid"
 )
 
+// Sidebar types
+
+type sidebarItem struct {
+	ID         int64
+	Title      string
+	Status     string // "draft", "published"
+	Processing bool   // true if repoStatus shows cloning/pulling/processing
+	Unread     bool   // true if new assistant response since last_viewed_at
+	RepoURL    string // shown only on dashboard
+	UpdatedAt  time.Time
+	Org        string // for URL construction
+	Repo       string // for URL construction
+}
+
+type sidebarData struct {
+	Items     []sidebarItem
+	Scope     string // "all" (dashboard) or "repo"
+	CurrentID int64  // highlighted item (0 if not on conversation page)
+	PollURL   string // URL for HTMX polling
+}
+
+// Base page data embedded in all page data structs
+type basePageData struct {
+	Sidebar sidebarData
+}
+
 type dashboardData struct {
+	basePageData
 	PromptRequests []models.PromptRequest
 }
 
@@ -28,10 +56,15 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	s.renderPage(w, "dashboard.html", dashboardData{PromptRequests: prs})
+	sidebar := s.buildSidebar(prs, "all", 0)
+	s.renderPage(w, "dashboard.html", dashboardData{
+		basePageData:   basePageData{Sidebar: sidebar},
+		PromptRequests: prs,
+	})
 }
 
 type repoData struct {
+	basePageData
 	RepoURL        string
 	Org            string
 	Repo           string
@@ -46,10 +79,11 @@ func (s *Server) handleRepoPage(w http.ResponseWriter, r *http.Request) {
 
 	if err := repo.ValidateURL(repoURL); err != nil {
 		s.renderPage(w, "repo.html", repoData{
-			RepoURL: repoURL,
-			Org:     org,
-			Repo:    repoName,
-			Error:   "Invalid repository URL format.",
+			basePageData: basePageData{Sidebar: s.buildSidebar(nil, "repo", 0)},
+			RepoURL:      repoURL,
+			Org:          org,
+			Repo:         repoName,
+			Error:        "Invalid repository URL format.",
 		})
 		return
 	}
@@ -57,10 +91,11 @@ func (s *Server) handleRepoPage(w http.ResponseWriter, r *http.Request) {
 	// Verify repo exists on GitHub
 	if err := github.VerifyRepo(r.Context(), org, repoName); err != nil {
 		s.renderPage(w, "repo.html", repoData{
-			RepoURL: repoURL,
-			Org:     org,
-			Repo:    repoName,
-			Error:   "This repository doesn't exist on GitHub or is not accessible.",
+			basePageData: basePageData{Sidebar: s.buildSidebar(nil, "repo", 0)},
+			RepoURL:      repoURL,
+			Org:          org,
+			Repo:         repoName,
+			Error:        "This repository doesn't exist on GitHub or is not accessible.",
 		})
 		return
 	}
@@ -72,7 +107,9 @@ func (s *Server) handleRepoPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sidebar := s.buildSidebar(prs, "repo", 0)
 	s.renderPage(w, "repo.html", repoData{
+		basePageData:   basePageData{Sidebar: sidebar},
 		RepoURL:        repoURL,
 		Org:            org,
 		Repo:           repoName,
@@ -123,6 +160,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 type conversationData struct {
+	basePageData
 	PromptRequest  *models.PromptRequest
 	Org            string
 	Repo           string
@@ -156,6 +194,7 @@ type optionData struct {
 func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 	org := r.PathValue("org")
 	repoName := r.PathValue("repo")
+	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
 
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -168,6 +207,9 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
 	}
+
+	// Update last_viewed_at for unread tracking
+	s.queries.UpdateLastViewedAt(id)
 
 	messages, err := s.queries.ListMessages(id)
 	if err != nil {
@@ -188,7 +230,6 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 	repoStatus := statusEntry.Status
 	if repoStatus == "" {
 		// Server restart recovery: check filesystem
-		repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
 		cloned, _ := repo.IsCloned(repoURL)
 		if cloned {
 			repoStatus = "ready"
@@ -200,7 +241,12 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 		repoStartedAt = statusEntry.StartedAt.Unix()
 	}
 
+	// Build sidebar with repo-scoped prompt requests
+	sidebarPRs, _ := s.queries.ListPromptRequestsByRepoURL(repoURL)
+	sidebar := s.buildSidebar(sidebarPRs, "repo", id)
+
 	data := conversationData{
+		basePageData:   basePageData{Sidebar: sidebar},
 		PromptRequest:  pr,
 		Org:            org,
 		Repo:           repoName,
@@ -872,6 +918,124 @@ func assembleQuestionAnswers(r *http.Request) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// buildSidebar creates sidebar data from a list of prompt requests, merging in
+// processing state from the in-memory repoStatus map and computing unread flags.
+func (s *Server) buildSidebar(prs []models.PromptRequest, scope string, currentID int64) sidebarData {
+	var items []sidebarItem
+	for _, pr := range prs {
+		// Parse org/repo from RepoURL (github.com/org/repo)
+		parts := strings.SplitN(pr.RepoURL, "/", 3)
+		var org, repoName string
+		if len(parts) == 3 {
+			org = parts[1]
+			repoName = parts[2]
+		}
+
+		// Check processing state from in-memory status
+		processing := false
+		entry := s.getRepoStatus(pr.ID)
+		if entry.Status == "cloning" || entry.Status == "pulling" || entry.Status == "processing" {
+			processing = true
+		}
+
+		// Compute unread: has assistant response newer than last_viewed_at
+		unread := false
+		if pr.LatestAssistantAt != nil && pr.ID != currentID {
+			if pr.LastViewedAt == nil {
+				unread = true
+			} else if pr.LatestAssistantAt.After(*pr.LastViewedAt) {
+				unread = true
+			}
+		}
+
+		items = append(items, sidebarItem{
+			ID:         pr.ID,
+			Title:      pr.Title,
+			Status:     pr.Status,
+			Processing: processing,
+			Unread:     unread,
+			RepoURL:    pr.RepoURL,
+			UpdatedAt:  pr.UpdatedAt,
+			Org:        org,
+			Repo:       repoName,
+		})
+	}
+
+	// Sort: processing first, then drafts, then published; within each group by UpdatedAt DESC
+	// The DB query already sorts drafts before published by updated_at DESC,
+	// so we just need to float processing items to the top.
+	sortSidebarItems(items)
+
+	// Build poll URL
+	pollURL := "/api/sidebar?scope=" + scope
+	if scope == "repo" && len(prs) > 0 {
+		pollURL += "&repo_url=" + prs[0].RepoURL
+	}
+	if currentID != 0 {
+		pollURL += "&current_id=" + strconv.FormatInt(currentID, 10)
+	}
+
+	return sidebarData{
+		Items:     items,
+		Scope:     scope,
+		CurrentID: currentID,
+		PollURL:   pollURL,
+	}
+}
+
+// sortSidebarItems sorts items: processing first, then drafts, then published.
+func sortSidebarItems(items []sidebarItem) {
+	// Stable sort to preserve the DB's updated_at DESC ordering within groups.
+	// We do a simple insertion-sort-style partition since the list is small.
+	n := len(items)
+	if n <= 1 {
+		return
+	}
+
+	// Assign sort keys: processing=0, draft=1, published=2
+	key := func(item sidebarItem) int {
+		if item.Processing {
+			return 0
+		}
+		if item.Status == "draft" {
+			return 1
+		}
+		return 2
+	}
+
+	// Simple stable sort (bubble sort is fine for small N)
+	for i := 0; i < n-1; i++ {
+		for j := 0; j < n-1-i; j++ {
+			if key(items[j]) > key(items[j+1]) {
+				items[j], items[j+1] = items[j+1], items[j]
+			}
+		}
+	}
+}
+
+// handleSidebarFragment returns the sidebar HTML fragment for HTMX polling.
+func (s *Server) handleSidebarFragment(w http.ResponseWriter, r *http.Request) {
+	scope := r.URL.Query().Get("scope")
+	repoURL := r.URL.Query().Get("repo_url")
+	currentID, _ := strconv.ParseInt(r.URL.Query().Get("current_id"), 10, 64)
+
+	var prs []models.PromptRequest
+	var err error
+	if scope == "repo" && repoURL != "" {
+		prs, err = s.queries.ListPromptRequestsByRepoURL(repoURL)
+	} else {
+		prs, err = s.queries.ListPromptRequests()
+	}
+	if err != nil {
+		log.Printf("sidebar query error: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	sidebar := s.buildSidebar(prs, scope, currentID)
+	s.renderFragment(w, "sidebar.html", sidebar)
 }
 
 // parseRawResponse extracts a claude.Response from the raw JSON stored in the DB.

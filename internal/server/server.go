@@ -79,12 +79,13 @@ func New(queries *db.Queries) (*Server, error) {
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/cancel", s.handleCancel)
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/resend", s.handleResend)
 	mux.HandleFunc("DELETE /github.com/{org}/{repo}/prompt-requests/{id}", s.handleDelete)
+	mux.HandleFunc("GET /api/sidebar", s.handleSidebarFragment)
 
 	s.httpSrv = &http.Server{Handler: mux}
 	return s, nil
 }
 
-// parsePages builds a template for each page by combining layout.html with the page template.
+// parsePages builds a template for each page by combining layout.html, shared partials, and the page template.
 func parsePages() (map[string]*template.Template, error) {
 	tmplFS, err := fs.Sub(templatesFS, "templates")
 	if err != nil {
@@ -96,12 +97,19 @@ func parsePages() (map[string]*template.Template, error) {
 		return nil, fmt.Errorf("reading layout: %w", err)
 	}
 
+	// Shared partials included in every page template
+	sidebarBytes, err := fs.ReadFile(tmplFS, "sidebar.html")
+	if err != nil {
+		return nil, fmt.Errorf("reading sidebar: %w", err)
+	}
+
 	pageNames := []string{
 		"dashboard.html",
 		"repo.html",
 		"conversation.html",
 		"message_fragment.html",
 		"status_fragment.html",
+		"sidebar.html",
 	}
 
 	pages := make(map[string]*template.Template, len(pageNames))
@@ -114,6 +122,10 @@ func parsePages() (map[string]*template.Template, error) {
 		tmpl, err := template.New("layout.html").Funcs(funcMap).Parse(string(layoutBytes))
 		if err != nil {
 			return nil, fmt.Errorf("parsing layout for %s: %w", name, err)
+		}
+
+		if _, err := tmpl.New("sidebar.html").Parse(string(sidebarBytes)); err != nil {
+			return nil, fmt.Errorf("parsing sidebar for %s: %w", name, err)
 		}
 
 		if _, err := tmpl.New(name).Parse(string(pageBytes)); err != nil {

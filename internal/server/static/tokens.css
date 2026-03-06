@@ -63,6 +63,7 @@
   /* Sizes */
   --size-container: 48rem;
   --size-sidebar: 16rem;
+  --size-prompt-sidebar: 24rem;
 
   /* Transitions */
   --transition-fast: 150ms ease;

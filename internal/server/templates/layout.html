@@ -18,8 +18,11 @@
       {{block "header-actions" .}}{{end}}
     </div>
   </header>
-  <main class="container">
-    {{block "content" .}}{{end}}
-  </main>
+  <div class="app-layout">
+    {{template "sidebar.html" .Sidebar}}
+    <main class="container">
+      {{block "content" .}}{{end}}
+    </main>
+  </div>
 </body>
 </html>
