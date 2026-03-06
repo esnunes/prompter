@@ -90,7 +90,37 @@
         </div>
         {{end}}
 
-        {{if and .RepoStatus (ne .RepoStatus "ready")}}
+        {{if eq .RepoStatus "processing"}}
+        <div id="repo-status" class="repo-status"
+             hx-get="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/status"
+             hx-trigger="every 2s"
+             hx-swap="outerHTML"
+             data-started-at="{{.RepoStartedAt}}">
+          <div class="processing-indicator">
+            <div class="spinner"></div>
+            <span class="processing-text">Thinking...</span>
+            <span class="elapsed-timer"></span>
+          </div>
+          <form hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/cancel"
+                hx-target="#repo-status"
+                hx-swap="outerHTML"
+                hx-disabled-elt="find button"
+                style="display:inline;">
+            <button type="submit" class="btn btn-sm btn-secondary">Cancel</button>
+          </form>
+        </div>
+        {{else if eq .RepoStatus "cancelled"}}
+        <div id="repo-status" class="repo-status repo-status-cancelled">
+          <span>Request cancelled.</span>
+          <form hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/resend"
+                hx-target="#repo-status"
+                hx-swap="outerHTML"
+                hx-disabled-elt="find button"
+                style="display:inline;">
+            <button type="submit" class="btn btn-sm btn-primary">Retry</button>
+          </form>
+        </div>
+        {{else if and .RepoStatus (ne .RepoStatus "ready")}}
         <div id="repo-status" class="repo-status"
              hx-get="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/status"
              hx-trigger="every 2s"

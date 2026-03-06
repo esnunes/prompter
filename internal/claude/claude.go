@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-const timeout = 120 * time.Second
-
 const systemPrompt = `You are a helpful assistant that guides open source contributors in creating clear, actionable feature requests for repository maintainers.
 
 You are running inside the repository's codebase. Use your tools (Read, Glob, Grep) to explore the code and understand the project structure, patterns, and conventions. This helps you ask informed questions.
@@ -124,9 +122,6 @@ type Option struct {
 }
 
 func SendMessage(ctx context.Context, sessionID, repoDir, userMessage string, resume bool) (*Response, string, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
 	args := []string{"-p"}
 	if resume {
 		// Continue an existing session.
@@ -156,8 +151,8 @@ func SendMessage(ctx context.Context, sessionID, repoDir, userMessage string, re
 
 	output, err := cmd.Output()
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, "", fmt.Errorf("AI is taking too long, please try again")
+		if ctx.Err() == context.Canceled {
+			return nil, "", fmt.Errorf("request cancelled")
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return nil, "", fmt.Errorf("claude error: %s", string(exitErr.Stderr))

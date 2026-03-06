@@ -3,11 +3,33 @@ function scrollConversation() {
   var c = document.getElementById("conversation");
   var q = document.getElementById("question-form");
   if (q) {
-    q.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Scroll to the assistant message preceding the questions so the user
+    // sees the full context (title + question text), not just the options.
+    var target = q.previousElementSibling || q;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
   } else if (c) {
     c.scrollTop = c.scrollHeight;
   }
 }
+
+// Update elapsed timers for processing indicators
+function updateElapsedTimers() {
+  var els = document.querySelectorAll("[data-started-at]");
+  els.forEach(function (el) {
+    var startedAt = parseInt(el.getAttribute("data-started-at"), 10);
+    if (!startedAt) return;
+    var timer = el.querySelector(".elapsed-timer");
+    if (!timer) return;
+    var elapsed = Math.floor(Date.now() / 1000) - startedAt;
+    if (elapsed < 0) elapsed = 0;
+    var mins = Math.floor(elapsed / 60);
+    var secs = elapsed % 60;
+    timer.textContent =
+      mins > 0 ? "(" + mins + "m " + secs + "s)" : "(" + secs + "s)";
+  });
+}
+
+setInterval(updateElapsedTimers, 1000);
 
 (function () {
   function renderMarkdown(root) {
@@ -70,7 +92,14 @@ function scrollConversation() {
   document.addEventListener("htmx:afterSwap", function (e) {
     renderMarkdown(e.detail.target);
     updateMessageFormVisibility();
-    scrollConversation();
+    updateElapsedTimers();
+
+    // Only scroll when new content is appended to #conversation,
+    // not on status poll swaps which would steal focus from buttons.
+    var target = e.detail.target;
+    if (target && target.id === "conversation") {
+      scrollConversation();
+    }
   });
 
   // Validate question forms before HTMX sends
