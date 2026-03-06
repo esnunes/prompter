@@ -34,17 +34,9 @@ a:hover {
 /* Layout */
 .app-layout {
   display: flex;
-  max-width: calc(var(--size-container) + var(--size-sidebar) + var(--space-4));
-  margin: 0 auto;
-}
-
-body:has(.conversation-wrapper) .app-layout {
-  max-width: calc(var(--size-container) + 2 * var(--size-sidebar) + 2 * var(--space-4));
 }
 
 .container {
-  max-width: var(--size-container);
-  margin: 0 auto;
   padding: var(--space-6) var(--space-4);
   flex: 1;
   min-width: 0;
@@ -58,8 +50,6 @@ body:has(.conversation-wrapper) .app-layout {
 }
 
 .header-inner {
-  max-width: calc(var(--size-container) + var(--size-sidebar) + var(--space-4));
-  margin: 0 auto;
   padding: 0 var(--space-4);
   display: flex;
   align-items: center;
@@ -254,18 +244,15 @@ label {
 }
 
 /* Two-column conversation layout */
-body:has(.conversation-wrapper) .header-inner {
-  max-width: calc(var(--size-container) + 2 * var(--size-sidebar) + 2 * var(--space-4));
-}
-
 .container:has(.conversation-wrapper) {
-  max-width: calc(var(--size-container) + var(--size-sidebar) + var(--space-4));
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 .conversation-wrapper {
   display: flex;
   gap: var(--space-4);
-  height: calc(100vh - 180px);
+  height: calc(100vh - 73px);
 }
 
 .conversation-main {
@@ -337,7 +324,7 @@ body:has(.conversation-wrapper) .header-inner {
 
 /* Prompt list sidebar (left) */
 .prompt-sidebar {
-  width: var(--size-sidebar);
+  width: var(--size-prompt-sidebar);
   flex-shrink: 0;
   border-right: 1px solid var(--color-border);
   padding: var(--space-4);
@@ -485,22 +472,6 @@ body:has(.conversation-wrapper) .header-inner {
     display: none;
   }
 
-  .app-layout {
-    max-width: var(--size-container);
-  }
-
-  .header-inner {
-    max-width: var(--size-container);
-  }
-
-  body:has(.conversation-wrapper) .header-inner {
-    max-width: var(--size-container);
-  }
-
-  .container:has(.conversation-wrapper) {
-    max-width: var(--size-container);
-  }
-
   .conversation-wrapper {
     flex-direction: column;
     height: auto;
@@ -535,7 +506,7 @@ body:has(.conversation-wrapper) .header-inner {
 .chat-container {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 180px);
+  height: calc(100vh - 73px);
 }
 
 .chat-messages {
