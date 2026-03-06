@@ -634,7 +634,7 @@ body:has(.conversation-wrapper) .header-inner {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
-.other-option:has(input:checked) .other-input {
+.question-group:has(.other-option input:checked) > .other-input {
   display: block;
 }
 

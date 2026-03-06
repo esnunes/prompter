@@ -1,3 +1,14 @@
+// Scroll to first question if present, otherwise scroll to bottom
+function scrollConversation() {
+  var c = document.getElementById("conversation");
+  var q = document.getElementById("question-form");
+  if (q) {
+    q.scrollIntoView({ behavior: "smooth", block: "start" });
+  } else if (c) {
+    c.scrollTop = c.scrollHeight;
+  }
+}
+
 (function () {
   function renderMarkdown(root) {
     var bubbles = (root || document).querySelectorAll(
@@ -59,6 +70,7 @@
   document.addEventListener("htmx:afterSwap", function (e) {
     renderMarkdown(e.detail.target);
     updateMessageFormVisibility();
+    scrollConversation();
   });
 
   // Validate question forms before HTMX sends
