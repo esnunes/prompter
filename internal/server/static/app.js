@@ -3,7 +3,10 @@ function scrollConversation() {
   var c = document.getElementById("conversation");
   var q = document.getElementById("question-form");
   if (q) {
-    q.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Scroll to the assistant message preceding the questions so the user
+    // sees the full context (title + question text), not just the options.
+    var target = q.previousElementSibling || q;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
   } else if (c) {
     c.scrollTop = c.scrollHeight;
   }
