@@ -123,14 +123,15 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 type conversationData struct {
-	PromptRequest *models.PromptRequest
-	Org           string
-	Repo          string
-	RepoStatus    string // "cloning", "pulling", "ready", "error", or "" (no active operation)
-	Timeline      []timelineItem
-	LastQuestions  []questionData
-	PromptReady   bool
-	Revisions     []models.Revision
+	PromptRequest  *models.PromptRequest
+	Org            string
+	Repo           string
+	RepoStatus     string // "cloning", "pulling", "ready", "processing", "cancelled", "error", or "" (no active operation)
+	RepoStartedAt int64  // Unix timestamp for processing timer
+	Timeline       []timelineItem
+	LastQuestions   []questionData
+	PromptReady    bool
+	Revisions      []models.Revision
 }
 
 type timelineItem struct {
@@ -194,13 +195,19 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var repoStartedAt int64
+	if !statusEntry.StartedAt.IsZero() {
+		repoStartedAt = statusEntry.StartedAt.Unix()
+	}
+
 	data := conversationData{
-		PromptRequest: pr,
-		Org:           org,
-		Repo:          repoName,
-		RepoStatus:    repoStatus,
-		Timeline:      buildTimeline(messages, revisions),
-		Revisions:     revisions,
+		PromptRequest:  pr,
+		Org:            org,
+		Repo:           repoName,
+		RepoStatus:     repoStatus,
+		RepoStartedAt: repoStartedAt,
+		Timeline:       buildTimeline(messages, revisions),
+		Revisions:      revisions,
 	}
 
 	// Check the last assistant message for pending questions / prompt ready
@@ -258,48 +265,6 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pr, err := s.queries.GetPromptRequest(id)
-	if err != nil {
-		http.Error(w, "Not Found", http.StatusNotFound)
-		return
-	}
-
-	// If repo is not ready, save the message but don't process with Claude yet
-	statusEntry := s.getRepoStatus(id)
-	if statusEntry.Status != "" && statusEntry.Status != "ready" {
-		userMsg, err := s.queries.CreateMessage(id, "user", userMessage, nil)
-		if err != nil {
-			log.Printf("saving user message: %v", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-		// Return user message bubble + disable the input form until auto-send completes
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fragment := messageFragmentData{
-			PromptRequestID: id,
-			Org:             org,
-			Repo:            repoName,
-			Messages:        []models.Message{*userMsg},
-		}
-		s.pages["message_fragment.html"].ExecuteTemplate(w, "message_fragment.html", fragment)
-		// Disable the message form — it will be re-enabled when the auto-send response arrives
-		fmt.Fprint(w, `<script>(function(){var f=document.getElementById('message-form');if(f){f.querySelector('textarea').disabled=true;f.querySelector('button').disabled=true;}})();</script>`)
-		return
-	}
-
-	// Serialize Claude CLI calls per session to avoid "session already in use"
-	mu := s.lockSession(pr.SessionID)
-	defer mu.Unlock()
-
-	// Check if this session already has messages (resume vs. new)
-	existingMsgs, err := s.queries.ListMessages(id)
-	if err != nil {
-		log.Printf("checking existing messages: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-	resume := len(existingMsgs) > 0
-
 	// Save user message
 	userMsg, err := s.queries.CreateMessage(id, "user", userMessage, nil)
 	if err != nil {
@@ -308,78 +273,48 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Call Claude CLI
-	resp, rawJSON, err := claude.SendMessage(r.Context(), pr.SessionID, pr.RepoLocalPath, userMessage, resume)
-	if err != nil {
-		log.Printf("claude error: %v", err)
-		// Save error as assistant message so user sees it
-		errMsg := fmt.Sprintf("Sorry, I encountered an error: %v", err)
-		s.queries.CreateMessage(id, "assistant", errMsg, nil)
-
+	// If repo is not ready, just save and disable form — auto-send kicks in when ready
+	statusEntry := s.getRepoStatus(id)
+	if statusEntry.Status != "" && statusEntry.Status != "ready" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fragment := messageFragmentData{
 			PromptRequestID: id,
 			Org:             org,
 			Repo:            repoName,
-			Messages: []models.Message{
-				*userMsg,
-				{Role: "assistant", Content: errMsg},
-			},
+			Messages:        []models.Message{*userMsg},
 		}
-		s.renderFragment(w, "message_fragment.html", fragment)
+		s.pages["message_fragment.html"].ExecuteTemplate(w, "message_fragment.html", fragment)
+		fmt.Fprint(w, `<script>(function(){var f=document.getElementById('message-form');if(f){f.querySelector('textarea').disabled=true;f.querySelector('button').disabled=true;}})();</script>`)
 		return
 	}
 
-	// Save assistant message
-	assistantMsg, err := s.queries.CreateMessage(id, "assistant", resp.Message, &rawJSON)
-	if err != nil {
-		log.Printf("saving assistant message: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
+	// Repo is ready — launch async Claude call
+	ctx, cancel := context.WithCancel(context.Background())
+	s.setRepoStatusProcessing(id, cancel)
+	go s.backgroundSendMessage(ctx, id)
 
-	// Set title from generated_title when prompt is ready, or fall back to message truncation
-	if pr.Title == "" {
-		if resp.GeneratedTitle != "" {
-			s.queries.UpdatePromptRequestTitle(id, resp.GeneratedTitle)
-		} else if resp.Message != "" {
-			title := resp.Message
-			if len(title) > 60 {
-				title = title[:60] + "..."
-			}
-			s.queries.UpdatePromptRequestTitle(id, title)
-		}
-	} else if resp.GeneratedTitle != "" {
-		// Update title with the generated one even if a rough one was set earlier
-		s.queries.UpdatePromptRequestTitle(id, resp.GeneratedTitle)
-	}
+	// Return user message bubble + processing status div for polling
+	pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
+	cancelURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/cancel", org, repoName, id)
 
-	// Build fragment response
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fragment := messageFragmentData{
 		PromptRequestID: id,
 		Org:             org,
 		Repo:            repoName,
-		Messages:        []models.Message{*userMsg, *assistantMsg},
+		Messages:        []models.Message{*userMsg},
 	}
+	s.pages["message_fragment.html"].ExecuteTemplate(w, "message_fragment.html", fragment)
 
-	for i, q := range resp.Questions {
-		qd := questionData{
-			Header:      q.Header,
-			Text:        q.Text,
-			MultiSelect: q.MultiSelect,
-			Index:       i,
-		}
-		for _, opt := range q.Options {
-			qd.Options = append(qd.Options, optionData{
-				Label:       opt.Label,
-				Description: opt.Description,
-			})
-		}
-		fragment.Questions = append(fragment.Questions, qd)
-	}
+	// Append processing status div that starts polling
+	entry := s.getRepoStatus(id)
+	fmt.Fprintf(w, `<div id="repo-status" class="repo-status" hx-get="%s" hx-trigger="every 2s" hx-swap="outerHTML" data-started-at="%d">`, pollURL, entry.StartedAt.Unix())
+	fmt.Fprint(w, `<div class="processing-indicator"><div class="spinner"></div><span class="processing-text">Thinking...</span><span class="elapsed-timer"></span></div>`)
+	fmt.Fprintf(w, `<form hx-post="%s" hx-target="#repo-status" hx-swap="outerHTML" hx-disabled-elt="find button" style="display:inline;"><button type="submit" class="btn btn-sm btn-secondary">Cancel</button></form>`, cancelURL)
+	fmt.Fprint(w, `</div>`)
 
-	fragment.PromptReady = resp.PromptReady
-
-	s.renderFragment(w, "message_fragment.html", fragment)
+	// Disable the message form while processing (setTimeout to run after HTMX re-enables hx-disabled-elt)
+	fmt.Fprint(w, `<script>setTimeout(function(){var f=document.getElementById('message-form');if(f){f.querySelector('textarea').disabled=true;f.querySelector('button').disabled=true;}if(typeof updateElapsedTimers==='function')updateElapsedTimers();},0);</script>`)
 }
 
 func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
@@ -505,10 +440,13 @@ func (s *Server) asyncEnsureCloned(prID int64, repoURL string) {
 }
 
 type statusFragmentData struct {
-	Status   string
-	Error    string
-	PollURL  string
-	RetryURL string
+	Status    string
+	Error     string
+	PollURL   string
+	RetryURL  string
+	CancelURL string
+	ResendURL string
+	StartedAt int64 // Unix timestamp, 0 if not processing
 }
 
 func (s *Server) handleRepoStatus(w http.ResponseWriter, r *http.Request) {
@@ -548,9 +486,11 @@ func (s *Server) handleRepoStatus(w http.ResponseWriter, r *http.Request) {
 			// Atomically transition to "processing" to prevent duplicate Claude calls
 			old := repoStatusEntry{Status: "ready"}
 			if s.repoStatus.CompareAndSwap(id, old, repoStatusEntry{Status: "processing"}) {
-				go s.backgroundSendMessage(id)
+				ctx, cancel := context.WithCancel(context.Background())
+				s.setRepoStatusProcessing(id, cancel)
+				go s.backgroundSendMessage(ctx, id)
 			}
-			entry = repoStatusEntry{Status: "processing"}
+			entry = s.getRepoStatus(id)
 		}
 	}
 
@@ -585,17 +525,30 @@ func (s *Server) handleRepoStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	cancelURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/cancel", org, repoName, id)
+	resendURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/resend", org, repoName, id)
+
+	var startedAt int64
+	if !entry.StartedAt.IsZero() {
+		startedAt = entry.StartedAt.Unix()
+	}
+
 	s.renderFragment(w, "status_fragment.html", statusFragmentData{
-		Status:   entry.Status,
-		Error:    entry.Error,
-		PollURL:  pollURL,
-		RetryURL: retryURL,
+		Status:    entry.Status,
+		Error:     entry.Error,
+		PollURL:   pollURL,
+		RetryURL:  retryURL,
+		CancelURL: cancelURL,
+		ResendURL: resendURL,
+		StartedAt: startedAt,
 	})
 }
 
 // backgroundSendMessage processes a pending user message with Claude in a background goroutine.
-// It saves the response to DB and updates the repo status to "responded".
-func (s *Server) backgroundSendMessage(prID int64) {
+// It saves the response to DB and updates the repo status to "responded" or "cancelled".
+func (s *Server) backgroundSendMessage(ctx context.Context, prID int64) {
+	defer s.clearCancelFunc(prID)
+
 	pr, err := s.queries.GetPromptRequest(prID)
 	if err != nil {
 		log.Printf("auto-send: getting prompt request: %v", err)
@@ -636,8 +589,14 @@ func (s *Server) backgroundSendMessage(prID int64) {
 		}
 	}
 
-	resp, rawJSON, err := claude.SendMessage(context.Background(), pr.SessionID, pr.RepoLocalPath, lastMsg.Content, resume)
+	resp, rawJSON, err := claude.SendMessage(ctx, pr.SessionID, pr.RepoLocalPath, lastMsg.Content, resume)
 	if err != nil {
+		if ctx.Err() == context.Canceled {
+			log.Printf("auto-send: cancelled for PR %d", prID)
+			s.queries.CreateMessage(prID, "assistant", "Request cancelled by user.", nil)
+			s.setRepoStatus(prID, "cancelled", "")
+			return
+		}
 		log.Printf("auto-send: claude error: %v", err)
 		errMsg := fmt.Sprintf("Sorry, I encountered an error: %v", err)
 		s.queries.CreateMessage(prID, "assistant", errMsg, nil)
@@ -696,6 +655,72 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 		Status:   s.getRepoStatus(id).Status,
 		PollURL:  pollURL,
 		RetryURL: retryURL,
+	})
+}
+
+func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	// Call the cancel function if processing
+	entry := s.getRepoStatus(id)
+	if entry.Status == "processing" {
+		if v, ok := s.cancelFuncs.Load(id); ok {
+			if cancel, ok := v.(context.CancelFunc); ok {
+				cancel()
+			}
+		}
+	}
+
+	// Return current status — the background goroutine will transition to "cancelled"
+	pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
+	cancelURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/cancel", org, repoName, id)
+
+	s.renderFragment(w, "status_fragment.html", statusFragmentData{
+		Status:    "processing",
+		PollURL:   pollURL,
+		CancelURL: cancelURL,
+		StartedAt: entry.StartedAt.Unix(),
+	})
+}
+
+func (s *Server) handleResend(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	// Delete the synthetic cancelled assistant message
+	lastMsg, err := s.queries.GetLastMessage(id)
+	if err == nil && lastMsg.Role == "assistant" && lastMsg.Content == "Request cancelled by user." {
+		s.queries.DeleteMessage(lastMsg.ID)
+	}
+
+	// Launch async Claude call
+	ctx, cancel := context.WithCancel(context.Background())
+	s.setRepoStatusProcessing(id, cancel)
+	go s.backgroundSendMessage(ctx, id)
+
+	// Return processing status fragment
+	pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
+	cancelURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/cancel", org, repoName, id)
+	entry := s.getRepoStatus(id)
+
+	s.renderFragment(w, "status_fragment.html", statusFragmentData{
+		Status:    "processing",
+		PollURL:   pollURL,
+		CancelURL: cancelURL,
+		StartedAt: entry.StartedAt.Unix(),
 	})
 }
 

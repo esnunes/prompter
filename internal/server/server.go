@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/esnunes/prompter/internal/db"
 )
@@ -20,10 +21,11 @@ var templatesFS embed.FS
 //go:embed static
 var staticFS embed.FS
 
-// repoStatusEntry tracks the state of an async clone/pull operation.
+// repoStatusEntry tracks the state of an async clone/pull or AI processing operation.
 type repoStatusEntry struct {
-	Status string // "cloning", "pulling", "ready", "error"
-	Error  string // error message if Status == "error"
+	Status    string    // "cloning", "pulling", "ready", "processing", "responded", "cancelled", "error"
+	Error     string    // error message if Status == "error"
+	StartedAt time.Time // when processing started (zero for non-processing states)
 }
 
 type Server struct {
@@ -32,9 +34,10 @@ type Server struct {
 	httpSrv    *http.Server
 	ln         net.Listener
 	addr       string
-	sessionMu  sync.Map // per-session mutex: session ID → *sync.Mutex
-	repoStatus sync.Map // per-prompt-request status: prompt request ID (int64) → repoStatusEntry
-	repoMu     sync.Map // per-repo mutex: repo URL (string) → *sync.Mutex
+	sessionMu   sync.Map // per-session mutex: session ID → *sync.Mutex
+	repoStatus  sync.Map // per-prompt-request status: prompt request ID (int64) → repoStatusEntry
+	cancelFuncs sync.Map // per-prompt-request cancel: prompt request ID (int64) → context.CancelFunc
+	repoMu      sync.Map // per-repo mutex: repo URL (string) → *sync.Mutex
 }
 
 var funcMap = template.FuncMap{
@@ -73,6 +76,8 @@ func New(queries *db.Queries) (*Server, error) {
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/publish", s.handlePublish)
 	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests/{id}/status", s.handleRepoStatus)
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/retry", s.handleRetry)
+	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/cancel", s.handleCancel)
+	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/resend", s.handleResend)
 	mux.HandleFunc("DELETE /github.com/{org}/{repo}/prompt-requests/{id}", s.handleDelete)
 
 	s.httpSrv = &http.Server{Handler: mux}
@@ -177,6 +182,15 @@ func (s *Server) lockSession(sessionID string) *sync.Mutex {
 
 func (s *Server) setRepoStatus(prID int64, status, errMsg string) {
 	s.repoStatus.Store(prID, repoStatusEntry{Status: status, Error: errMsg})
+}
+
+func (s *Server) setRepoStatusProcessing(prID int64, cancelFunc context.CancelFunc) {
+	s.repoStatus.Store(prID, repoStatusEntry{Status: "processing", StartedAt: time.Now()})
+	s.cancelFuncs.Store(prID, cancelFunc)
+}
+
+func (s *Server) clearCancelFunc(prID int64) {
+	s.cancelFuncs.Delete(prID)
 }
 
 func (s *Server) getRepoStatus(prID int64) repoStatusEntry {

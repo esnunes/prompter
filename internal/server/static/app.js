@@ -9,6 +9,25 @@ function scrollConversation() {
   }
 }
 
+// Update elapsed timers for processing indicators
+function updateElapsedTimers() {
+  var els = document.querySelectorAll("[data-started-at]");
+  els.forEach(function (el) {
+    var startedAt = parseInt(el.getAttribute("data-started-at"), 10);
+    if (!startedAt) return;
+    var timer = el.querySelector(".elapsed-timer");
+    if (!timer) return;
+    var elapsed = Math.floor(Date.now() / 1000) - startedAt;
+    if (elapsed < 0) elapsed = 0;
+    var mins = Math.floor(elapsed / 60);
+    var secs = elapsed % 60;
+    timer.textContent =
+      mins > 0 ? "(" + mins + "m " + secs + "s)" : "(" + secs + "s)";
+  });
+}
+
+setInterval(updateElapsedTimers, 1000);
+
 (function () {
   function renderMarkdown(root) {
     var bubbles = (root || document).querySelectorAll(
@@ -71,6 +90,7 @@ function scrollConversation() {
     renderMarkdown(e.detail.target);
     updateMessageFormVisibility();
     scrollConversation();
+    updateElapsedTimers();
   });
 
   // Validate question forms before HTMX sends
