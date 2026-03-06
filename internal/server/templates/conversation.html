@@ -39,7 +39,7 @@
                 hx-target="#conversation"
                 hx-swap="beforeend"
                 hx-disabled-elt="find button"
-                hx-on::after-request="this.closest('.question-block').remove(); document.getElementById('message-form').style.display = ''; document.getElementById('conversation').scrollTop = document.getElementById('conversation').scrollHeight;">
+                hx-on::after-request="this.closest('.question-block').remove(); document.getElementById('message-form').style.display = ''; scrollConversation();">
             {{range $q := .LastQuestions}}
             <div class="question-group">
               {{if $q.Header}}<span class="question-header">{{$q.Header}}</span>{{end}}
@@ -63,10 +63,10 @@
                   {{end}}
                   <div>
                     <div class="option-label">Other</div>
-                    <input type="text" name="q_{{$q.Index}}_other" class="other-input" placeholder="Type your answer..." maxlength="500">
                   </div>
                 </label>
               </div>
+              <input type="text" name="q_{{$q.Index}}_other" class="other-input" placeholder="Type your answer..." maxlength="500">
             </div>
             {{end}}
             <div class="mt-4" style="display:flex;gap:var(--space-3);">
@@ -107,7 +107,7 @@
               hx-target="#conversation"
               hx-swap="beforeend"
               hx-disabled-elt="find button, find textarea"
-              hx-on::after-request="this.reset(); document.getElementById('conversation').scrollTop = document.getElementById('conversation').scrollHeight;">
+              hx-on::after-request="this.reset(); scrollConversation();">
           <textarea name="message" placeholder="Describe the feature you'd like..." rows="2" required></textarea>
           <button type="submit" class="btn btn-primary">Send</button>
           <div class="htmx-indicator"><div class="spinner"></div></div>
