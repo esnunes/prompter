@@ -100,17 +100,45 @@ func (q *Queries) GetPromptRequest(id int64) (*models.PromptRequest, error) {
 	return pr, nil
 }
 
-func (q *Queries) ListPromptRequests() ([]models.PromptRequest, error) {
-	rows, err := q.db.Query(
-		`SELECT pr.id, pr.repository_id, pr.title, pr.status, pr.session_id,
+const listPromptRequestsQuery = `SELECT pr.id, pr.repository_id, pr.title, pr.status, pr.session_id,
 		        pr.issue_number, pr.issue_url, pr.created_at, pr.updated_at,
 		        r.url,
 		        (SELECT COUNT(*) FROM messages WHERE prompt_request_id = pr.id) as message_count,
-		        (SELECT COUNT(*) FROM revisions WHERE prompt_request_id = pr.id) as revision_count
+		        (SELECT COUNT(*) FROM revisions WHERE prompt_request_id = pr.id) as revision_count,
+		        pr.last_viewed_at,
+		        (SELECT MAX(created_at) FROM messages WHERE prompt_request_id = pr.id AND role = 'assistant') as latest_assistant_at
 		 FROM prompt_requests pr
 		 JOIN repositories r ON r.id = pr.repository_id
-		 WHERE pr.status != 'deleted'
-		 ORDER BY pr.updated_at DESC`,
+		 WHERE pr.status != 'deleted'`
+
+func scanPromptRequest(rows *sql.Rows) (models.PromptRequest, error) {
+	var pr models.PromptRequest
+	var createdAt, updatedAt string
+	var lastViewedAt, latestAssistantAt *string
+	if err := rows.Scan(&pr.ID, &pr.RepositoryID, &pr.Title, &pr.Status, &pr.SessionID,
+		&pr.IssueNumber, &pr.IssueURL, &createdAt, &updatedAt, &pr.RepoURL,
+		&pr.MessageCount, &pr.RevisionCount, &lastViewedAt, &latestAssistantAt); err != nil {
+		return pr, err
+	}
+	pr.CreatedAt, _ = time.Parse(time.DateTime, createdAt)
+	pr.UpdatedAt, _ = time.Parse(time.DateTime, updatedAt)
+	if lastViewedAt != nil {
+		t, _ := time.Parse(time.DateTime, *lastViewedAt)
+		pr.LastViewedAt = &t
+	}
+	if latestAssistantAt != nil {
+		t, _ := time.Parse(time.DateTime, *latestAssistantAt)
+		pr.LatestAssistantAt = &t
+	}
+	return pr, nil
+}
+
+func (q *Queries) ListPromptRequests() ([]models.PromptRequest, error) {
+	rows, err := q.db.Query(
+		listPromptRequestsQuery + `
+		 ORDER BY
+		   CASE WHEN pr.status = 'draft' THEN 0 ELSE 1 END ASC,
+		   pr.updated_at DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing prompt requests: %w", err)
@@ -119,15 +147,10 @@ func (q *Queries) ListPromptRequests() ([]models.PromptRequest, error) {
 
 	var results []models.PromptRequest
 	for rows.Next() {
-		var pr models.PromptRequest
-		var createdAt, updatedAt string
-		if err := rows.Scan(&pr.ID, &pr.RepositoryID, &pr.Title, &pr.Status, &pr.SessionID,
-			&pr.IssueNumber, &pr.IssueURL, &createdAt, &updatedAt, &pr.RepoURL,
-			&pr.MessageCount, &pr.RevisionCount); err != nil {
+		pr, err := scanPromptRequest(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scanning prompt request: %w", err)
 		}
-		pr.CreatedAt, _ = time.Parse(time.DateTime, createdAt)
-		pr.UpdatedAt, _ = time.Parse(time.DateTime, updatedAt)
 		results = append(results, pr)
 	}
 	return results, rows.Err()
@@ -135,15 +158,10 @@ func (q *Queries) ListPromptRequests() ([]models.PromptRequest, error) {
 
 func (q *Queries) ListPromptRequestsByRepoURL(repoURL string) ([]models.PromptRequest, error) {
 	rows, err := q.db.Query(
-		`SELECT pr.id, pr.repository_id, pr.title, pr.status, pr.session_id,
-		        pr.issue_number, pr.issue_url, pr.created_at, pr.updated_at,
-		        r.url,
-		        (SELECT COUNT(*) FROM messages WHERE prompt_request_id = pr.id) as message_count,
-		        (SELECT COUNT(*) FROM revisions WHERE prompt_request_id = pr.id) as revision_count
-		 FROM prompt_requests pr
-		 JOIN repositories r ON r.id = pr.repository_id
-		 WHERE pr.status != 'deleted' AND r.url = ?
-		 ORDER BY pr.updated_at DESC`, repoURL,
+		listPromptRequestsQuery+` AND r.url = ?
+		 ORDER BY
+		   CASE WHEN pr.status = 'draft' THEN 0 ELSE 1 END ASC,
+		   pr.updated_at DESC`, repoURL,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing prompt requests by repo: %w", err)
@@ -152,15 +170,10 @@ func (q *Queries) ListPromptRequestsByRepoURL(repoURL string) ([]models.PromptRe
 
 	var results []models.PromptRequest
 	for rows.Next() {
-		var pr models.PromptRequest
-		var createdAt, updatedAt string
-		if err := rows.Scan(&pr.ID, &pr.RepositoryID, &pr.Title, &pr.Status, &pr.SessionID,
-			&pr.IssueNumber, &pr.IssueURL, &createdAt, &updatedAt, &pr.RepoURL,
-			&pr.MessageCount, &pr.RevisionCount); err != nil {
+		pr, err := scanPromptRequest(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scanning prompt request: %w", err)
 		}
-		pr.CreatedAt, _ = time.Parse(time.DateTime, createdAt)
-		pr.UpdatedAt, _ = time.Parse(time.DateTime, updatedAt)
 		results = append(results, pr)
 	}
 	return results, rows.Err()
@@ -192,6 +205,13 @@ func (q *Queries) UpdatePromptRequestIssue(id int64, issueNumber int, issueURL s
 
 func (q *Queries) DeletePromptRequest(id int64) error {
 	return q.UpdatePromptRequestStatus(id, "deleted")
+}
+
+func (q *Queries) UpdateLastViewedAt(id int64) error {
+	_, err := q.db.Exec(
+		`UPDATE prompt_requests SET last_viewed_at = datetime('now') WHERE id = ?`, id,
+	)
+	return err
 }
 
 // GeneratedContent holds the title, motivation, and prompt extracted from a Claude response.
