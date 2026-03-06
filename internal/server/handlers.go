@@ -306,6 +306,10 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.pages["message_fragment.html"].ExecuteTemplate(w, "message_fragment.html", fragment)
 
+	// Remove any stale #repo-status element (e.g. leftover "Repository ready!" div)
+	// before appending the new processing div to avoid duplicate IDs.
+	fmt.Fprint(w, `<script>(function(){var old=document.getElementById('repo-status');if(old)old.remove();})();</script>`)
+
 	// Append processing status div that starts polling
 	entry := s.getRepoStatus(id)
 	fmt.Fprintf(w, `<div id="repo-status" class="repo-status" hx-get="%s" hx-trigger="every 2s" hx-swap="outerHTML" data-started-at="%d">`, pollURL, entry.StartedAt.Unix())
