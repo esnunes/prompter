@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
-	"runtime"
 
 	"github.com/esnunes/prompter/internal/db"
 	"github.com/esnunes/prompter/internal/github"
@@ -45,11 +45,18 @@ func run() error {
 		return fmt.Errorf("creating server: %w", err)
 	}
 
-	if err := srv.Listen(); err != nil {
-		return err
+	host := os.Getenv("PROMPTER_HOST")
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	port := os.Getenv("PROMPTER_PORT")
+	if port == "" {
+		port = "8080"
 	}
 
-	openBrowser("http://" + srv.Addr())
+	if err := srv.Listen(net.JoinHostPort(host, port)); err != nil {
+		return err
+	}
 
 	return srv.Serve(ctx)
 }
@@ -73,19 +80,4 @@ func checkDependencies(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func openBrowser(url string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		return
-	}
-	cmd.Start()
 }

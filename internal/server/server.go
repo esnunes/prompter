@@ -120,9 +120,9 @@ func parsePages() (map[string]*template.Template, error) {
 	return pages, nil
 }
 
-// Listen binds the server to a random available port. Call Serve to start handling requests.
-func (s *Server) Listen() error {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+// Listen binds the server to the given address. Call Serve to start handling requests.
+func (s *Server) Listen(addr string) error {
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("binding port: %w", err)
 	}
@@ -138,7 +138,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		s.httpSrv.Shutdown(context.Background())
 	}()
 
-	fmt.Printf("Prompter running at http://%s\n", s.addr)
+	fmt.Printf("Listening on http://%s\n", s.addr)
 	fmt.Println("Press Ctrl+C to stop.")
 
 	if err := s.httpSrv.Serve(s.ln); err != nil && err != http.ErrServerClosed {
