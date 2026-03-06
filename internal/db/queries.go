@@ -383,6 +383,11 @@ func (q *Queries) ListRevisions(promptRequestID int64) ([]models.Revision, error
 	return results, rows.Err()
 }
 
+func (q *Queries) DeleteMessage(id int64) error {
+	_, err := q.db.Exec(`DELETE FROM messages WHERE id = ?`, id)
+	return err
+}
+
 func (q *Queries) GetLastMessage(promptRequestID int64) (*models.Message, error) {
 	m := &models.Message{}
 	var createdAt string
