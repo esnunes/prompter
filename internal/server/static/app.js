@@ -89,8 +89,14 @@ setInterval(updateElapsedTimers, 1000);
   document.addEventListener("htmx:afterSwap", function (e) {
     renderMarkdown(e.detail.target);
     updateMessageFormVisibility();
-    scrollConversation();
     updateElapsedTimers();
+
+    // Only scroll when new content is appended to #conversation,
+    // not on status poll swaps which would steal focus from buttons.
+    var target = e.detail.target;
+    if (target && target.id === "conversation") {
+      scrollConversation();
+    }
   });
 
   // Validate question forms before HTMX sends
