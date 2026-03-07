@@ -1,21 +1,21 @@
 :root {
-  /* Colors */
-  --color-text: #1a1a2e;
-  --color-text-secondary: #64748b;
-  --color-background: #ffffff;
-  --color-surface: #f8fafc;
-  --color-primary: #2563eb;
-  --color-primary-hover: #1d4ed8;
-  --color-secondary: #64748b;
-  --color-accent: #8b5cf6;
-  --color-muted: #f1f5f9;
-  --color-border: #e2e8f0;
-  --color-success: #16a34a;
-  --color-success-bg: #f0fdf4;
-  --color-error: #dc2626;
-  --color-error-bg: #fef2f2;
-  --color-warning: #d97706;
-  --color-warning-bg: #fffbeb;
+  /* Colors — Catppuccin Latte */
+  --color-text: #4c4f69;
+  --color-text-secondary: #6c6f85;
+  --color-background: #eff1f5;
+  --color-surface: #e6e9ef;
+  --color-primary: #1e66f5;
+  --color-primary-hover: #1a5ad8;
+  --color-secondary: #6c6f85;
+  --color-accent: #7287fd;
+  --color-muted: #dce0e8;
+  --color-border: #ccd0da;
+  --color-success: #40a02b;
+  --color-success-bg: #e2f0dc;
+  --color-error: #d20f39;
+  --color-error-bg: #f5dfe3;
+  --color-warning: #df8e1d;
+  --color-warning-bg: #f3ebda;
 
   /* Typography */
   --font-body: system-ui, -apple-system, sans-serif;
@@ -55,10 +55,10 @@
   --radius-full: 9999px;
   --border-width: 1px;
 
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
-  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+  /* Shadows — tinted with Text color for warmth */
+  --shadow-sm: 0 1px 2px rgba(76, 79, 105, 0.06);
+  --shadow-md: 0 4px 6px rgba(76, 79, 105, 0.08);
+  --shadow-lg: 0 10px 15px rgba(76, 79, 105, 0.10);
 
   /* Sizes */
   --size-container: 48rem;
