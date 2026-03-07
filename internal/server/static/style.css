@@ -78,7 +78,9 @@ a:hover {
 .header {
   background: var(--color-background);
   border-bottom: var(--border-width) solid var(--color-border-subtle);
-  padding: var(--space-3) 0;
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
   box-shadow: 0 1px 3px rgba(76, 79, 105, 0.04);
   position: sticky;
   top: 0;
