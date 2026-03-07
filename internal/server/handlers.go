@@ -47,19 +47,27 @@ type basePageData struct {
 type dashboardData struct {
 	basePageData
 	PromptRequests []models.PromptRequest
+	ShowArchived   bool
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	prs, err := s.queries.ListPromptRequests()
+	showArchived := r.URL.Query().Get("archived") == "1"
+	prs, err := s.queries.ListPromptRequests(showArchived)
 	if err != nil {
 		log.Printf("listing prompt requests: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	sidebar := s.buildSidebar(prs, "all", 0)
+	// Sidebar always gets active prompts
+	sidebarPRs := prs
+	if showArchived {
+		sidebarPRs, _ = s.queries.ListPromptRequests(false)
+	}
+	sidebar := s.buildSidebar(sidebarPRs, "all", 0)
 	s.renderPage(w, "dashboard.html", dashboardData{
 		basePageData:   basePageData{Sidebar: sidebar},
 		PromptRequests: prs,
+		ShowArchived:   showArchived,
 	})
 }
 
@@ -70,6 +78,7 @@ type repoData struct {
 	Repo           string
 	Error          string
 	PromptRequests []models.PromptRequest
+	ShowArchived   bool
 }
 
 func (s *Server) handleRepoPage(w http.ResponseWriter, r *http.Request) {
@@ -100,20 +109,27 @@ func (s *Server) handleRepoPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prs, err := s.queries.ListPromptRequestsByRepoURL(repoURL)
+	showArchived := r.URL.Query().Get("archived") == "1"
+	prs, err := s.queries.ListPromptRequestsByRepoURL(repoURL, showArchived)
 	if err != nil {
 		log.Printf("listing prompt requests for repo: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	sidebar := s.buildSidebar(prs, "repo", 0)
+	// Sidebar always gets active prompts
+	sidebarPRs := prs
+	if showArchived {
+		sidebarPRs, _ = s.queries.ListPromptRequestsByRepoURL(repoURL, false)
+	}
+	sidebar := s.buildSidebar(sidebarPRs, "repo", 0)
 	s.renderPage(w, "repo.html", repoData{
 		basePageData:   basePageData{Sidebar: sidebar},
 		RepoURL:        repoURL,
 		Org:            org,
 		Repo:           repoName,
 		PromptRequests: prs,
+		ShowArchived:   showArchived,
 	})
 }
 
@@ -241,8 +257,8 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 		repoStartedAt = statusEntry.StartedAt.Unix()
 	}
 
-	// Build sidebar with repo-scoped prompt requests
-	sidebarPRs, _ := s.queries.ListPromptRequestsByRepoURL(repoURL)
+	// Build sidebar with repo-scoped active prompt requests (never archived)
+	sidebarPRs, _ := s.queries.ListPromptRequestsByRepoURL(repoURL, false)
 	sidebar := s.buildSidebar(sidebarPRs, "repo", id)
 
 	data := conversationData{
@@ -472,6 +488,78 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, fmt.Sprintf("/github.com/%s/%s/prompt-requests", org, repoName), http.StatusSeeOther)
+}
+
+type archiveBannerData struct {
+	Org           string
+	Repo          string
+	PromptRequest *models.PromptRequest
+}
+
+func (s *Server) handleArchive(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	if err := s.queries.ArchivePromptRequest(id); err != nil {
+		log.Printf("archiving prompt request: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// If HTMX request (from conversation page), return the archived banner fragment
+	if r.Header.Get("HX-Request") == "true" {
+		pr, _ := s.queries.GetPromptRequest(id)
+		s.renderFragment(w, "archive_banner_fragment.html", archiveBannerData{
+			Org:           org,
+			Repo:          repoName,
+			PromptRequest: pr,
+		})
+		return
+	}
+
+	// Otherwise (from list page), redirect back
+	referer := r.Header.Get("Referer")
+	if referer == "" {
+		referer = fmt.Sprintf("/github.com/%s/%s/prompt-requests", org, repoName)
+	}
+	http.Redirect(w, r, referer, http.StatusSeeOther)
+}
+
+func (s *Server) handleUnarchive(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	repoName := r.PathValue("repo")
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	if err := s.queries.UnarchivePromptRequest(id); err != nil {
+		log.Printf("unarchiving prompt request: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// If HTMX request (from conversation page), return empty banner (removes it)
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<div id="archive-banner"></div>`)
+		return
+	}
+
+	// Otherwise (from list page), redirect back
+	referer := r.Header.Get("Referer")
+	if referer == "" {
+		referer = fmt.Sprintf("/github.com/%s/%s/prompt-requests", org, repoName)
+	}
+	http.Redirect(w, r, referer, http.StatusSeeOther)
 }
 
 // asyncEnsureCloned runs clone/pull in the background, updating status in sync.Map.
@@ -1024,9 +1112,9 @@ func (s *Server) handleSidebarFragment(w http.ResponseWriter, r *http.Request) {
 	var prs []models.PromptRequest
 	var err error
 	if scope == "repo" && repoURL != "" {
-		prs, err = s.queries.ListPromptRequestsByRepoURL(repoURL)
+		prs, err = s.queries.ListPromptRequestsByRepoURL(repoURL, false)
 	} else {
-		prs, err = s.queries.ListPromptRequests()
+		prs, err = s.queries.ListPromptRequests(false)
 	}
 	if err != nil {
 		log.Printf("sidebar query error: %v", err)

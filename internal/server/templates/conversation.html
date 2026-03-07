@@ -13,6 +13,19 @@
 {{define "content"}}
 <div class="conversation-wrapper">
   <div class="conversation-main">
+    {{if .PromptRequest.Archived}}
+    <div class="archive-banner" id="archive-banner">
+      <span>This prompt request is archived.</span>
+      <form hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/unarchive"
+            hx-target="#archive-banner"
+            hx-swap="outerHTML"
+            style="display:inline;">
+        <button type="submit" class="btn btn-sm btn-secondary">Unarchive</button>
+      </form>
+    </div>
+    {{else}}
+    <div id="archive-banner"></div>
+    {{end}}
     <div class="chat-container">
       <div class="chat-messages" id="conversation">
         {{range .Timeline}}
@@ -165,6 +178,19 @@
     {{else}}
       <p class="text-secondary text-sm">Not published yet</p>
     {{end}}
+    <div class="sidebar-archive-action">
+      {{if .PromptRequest.Archived}}
+      <button type="button" class="btn btn-sm btn-secondary btn-block"
+              onclick="fetch('/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/unarchive', {method:'POST'}).then(function(){location.reload()});">
+        Unarchive
+      </button>
+      {{else}}
+      <button type="button" class="btn btn-sm btn-secondary btn-block"
+              onclick="var msg='Archive this prompt request?'; {{if .PromptRequest.IssueURL}}msg+=' The linked GitHub issue will remain open.';{{end}} if(confirm(msg)){fetch('/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/archive', {method:'POST'}).then(function(){location.reload()});}">
+        Archive
+      </button>
+      {{end}}
+    </div>
   </aside>
 </div>
 {{end}}

@@ -83,18 +83,21 @@ func (q *Queries) CreatePromptRequest(repoID int64, sessionID string) (*models.P
 func (q *Queries) GetPromptRequest(id int64) (*models.PromptRequest, error) {
 	pr := &models.PromptRequest{}
 	var createdAt, updatedAt string
+	var archived int
 	err := q.db.QueryRow(
 		`SELECT pr.id, pr.repository_id, pr.title, pr.status, pr.session_id,
 		        pr.issue_number, pr.issue_url, pr.created_at, pr.updated_at,
-		        r.url, r.local_path
+		        r.url, r.local_path, pr.archived
 		 FROM prompt_requests pr
 		 JOIN repositories r ON r.id = pr.repository_id
 		 WHERE pr.id = ?`, id,
 	).Scan(&pr.ID, &pr.RepositoryID, &pr.Title, &pr.Status, &pr.SessionID,
-		&pr.IssueNumber, &pr.IssueURL, &createdAt, &updatedAt, &pr.RepoURL, &pr.RepoLocalPath)
+		&pr.IssueNumber, &pr.IssueURL, &createdAt, &updatedAt, &pr.RepoURL, &pr.RepoLocalPath,
+		&archived)
 	if err != nil {
 		return nil, fmt.Errorf("getting prompt request: %w", err)
 	}
+	pr.Archived = archived != 0
 	pr.CreatedAt, _ = time.Parse(time.DateTime, createdAt)
 	pr.UpdatedAt, _ = time.Parse(time.DateTime, updatedAt)
 	return pr, nil
@@ -106,7 +109,8 @@ const listPromptRequestsQuery = `SELECT pr.id, pr.repository_id, pr.title, pr.st
 		        (SELECT COUNT(*) FROM messages WHERE prompt_request_id = pr.id) as message_count,
 		        (SELECT COUNT(*) FROM revisions WHERE prompt_request_id = pr.id) as revision_count,
 		        pr.last_viewed_at,
-		        (SELECT MAX(created_at) FROM messages WHERE prompt_request_id = pr.id AND role = 'assistant') as latest_assistant_at
+		        (SELECT MAX(created_at) FROM messages WHERE prompt_request_id = pr.id AND role = 'assistant') as latest_assistant_at,
+		        pr.archived
 		 FROM prompt_requests pr
 		 JOIN repositories r ON r.id = pr.repository_id
 		 WHERE pr.status != 'deleted'`
@@ -115,11 +119,14 @@ func scanPromptRequest(rows *sql.Rows) (models.PromptRequest, error) {
 	var pr models.PromptRequest
 	var createdAt, updatedAt string
 	var lastViewedAt, latestAssistantAt *string
+	var archived int
 	if err := rows.Scan(&pr.ID, &pr.RepositoryID, &pr.Title, &pr.Status, &pr.SessionID,
 		&pr.IssueNumber, &pr.IssueURL, &createdAt, &updatedAt, &pr.RepoURL,
-		&pr.MessageCount, &pr.RevisionCount, &lastViewedAt, &latestAssistantAt); err != nil {
+		&pr.MessageCount, &pr.RevisionCount, &lastViewedAt, &latestAssistantAt,
+		&archived); err != nil {
 		return pr, err
 	}
+	pr.Archived = archived != 0
 	pr.CreatedAt, _ = time.Parse(time.DateTime, createdAt)
 	pr.UpdatedAt, _ = time.Parse(time.DateTime, updatedAt)
 	if lastViewedAt != nil {
@@ -133,12 +140,17 @@ func scanPromptRequest(rows *sql.Rows) (models.PromptRequest, error) {
 	return pr, nil
 }
 
-func (q *Queries) ListPromptRequests() ([]models.PromptRequest, error) {
+func (q *Queries) ListPromptRequests(archivedOnly bool) ([]models.PromptRequest, error) {
+	archivedVal := 0
+	if archivedOnly {
+		archivedVal = 1
+	}
 	rows, err := q.db.Query(
-		listPromptRequestsQuery + `
+		listPromptRequestsQuery+` AND pr.archived = ?
 		 ORDER BY
 		   CASE WHEN pr.status = 'draft' THEN 0 ELSE 1 END ASC,
 		   pr.updated_at DESC`,
+		archivedVal,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing prompt requests: %w", err)
@@ -156,12 +168,16 @@ func (q *Queries) ListPromptRequests() ([]models.PromptRequest, error) {
 	return results, rows.Err()
 }
 
-func (q *Queries) ListPromptRequestsByRepoURL(repoURL string) ([]models.PromptRequest, error) {
+func (q *Queries) ListPromptRequestsByRepoURL(repoURL string, archivedOnly bool) ([]models.PromptRequest, error) {
+	archivedVal := 0
+	if archivedOnly {
+		archivedVal = 1
+	}
 	rows, err := q.db.Query(
-		listPromptRequestsQuery+` AND r.url = ?
+		listPromptRequestsQuery+` AND r.url = ? AND pr.archived = ?
 		 ORDER BY
 		   CASE WHEN pr.status = 'draft' THEN 0 ELSE 1 END ASC,
-		   pr.updated_at DESC`, repoURL,
+		   pr.updated_at DESC`, repoURL, archivedVal,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing prompt requests by repo: %w", err)
@@ -205,6 +221,20 @@ func (q *Queries) UpdatePromptRequestIssue(id int64, issueNumber int, issueURL s
 
 func (q *Queries) DeletePromptRequest(id int64) error {
 	return q.UpdatePromptRequestStatus(id, "deleted")
+}
+
+func (q *Queries) ArchivePromptRequest(id int64) error {
+	_, err := q.db.Exec(
+		`UPDATE prompt_requests SET archived = 1 WHERE id = ?`, id,
+	)
+	return err
+}
+
+func (q *Queries) UnarchivePromptRequest(id int64) error {
+	_, err := q.db.Exec(
+		`UPDATE prompt_requests SET archived = 0 WHERE id = ?`, id,
+	)
+	return err
 }
 
 func (q *Queries) UpdateLastViewedAt(id int64) error {

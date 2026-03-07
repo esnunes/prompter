@@ -71,6 +71,7 @@ a:hover {
 
 /* Cards */
 .card {
+  position: relative;
   background: var(--color-background);
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -115,6 +116,76 @@ a:hover {
 .badge-published {
   background: var(--color-success-bg);
   color: var(--color-success);
+}
+
+.badge-archived {
+  background: var(--color-muted);
+  color: var(--color-text-secondary);
+}
+
+/* Card action icons (archive/unarchive on list pages) */
+.card-action {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  padding: var(--space-1);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  line-height: 1;
+}
+
+.card-action:hover {
+  color: var(--color-text);
+  background: var(--color-muted);
+}
+
+.card-action:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Archive toggle switch */
+.archive-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.archive-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* Archive banner in conversation view */
+.archive-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
+  font-size: var(--font-size-sm);
+}
+
+/* Sidebar archive action */
+.sidebar-archive-action {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.btn-block {
+  display: block;
+  width: 100%;
 }
 
 /* Buttons */

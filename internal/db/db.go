@@ -82,5 +82,8 @@ func Open(dbPath string) (*sql.DB, error) {
 	// Migration: add last_viewed_at for unread tracking in prompt list sidebar.
 	db.Exec(`ALTER TABLE prompt_requests ADD COLUMN last_viewed_at TEXT`)
 
+	// Migration: add archived flag for archiving prompt requests.
+	db.Exec(`ALTER TABLE prompt_requests ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`)
+
 	return db, nil
 }

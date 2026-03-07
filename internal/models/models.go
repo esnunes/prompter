@@ -21,6 +21,8 @@ type PromptRequest struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 
+	Archived bool
+
 	// Joined fields (not stored directly)
 	RepoURL           string
 	RepoLocalPath     string
