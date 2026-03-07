@@ -3,6 +3,11 @@
 {{define "content"}}
 <div class="dashboard-header">
   <h2>Dashboard</h2>
+  <label class="archive-toggle">
+    <input type="checkbox" {{if .ShowArchived}}checked{{end}}
+           onchange="window.location.href = this.checked ? '/?archived=1' : '/'">
+    Show archived
+  </label>
 </div>
 
 <div class="card mb-4">
@@ -16,7 +21,7 @@
 </div>
 
 {{if .PromptRequests}}
-<h3 class="mb-4">Your prompt requests</h3>
+<h3 class="mb-4">{{if .ShowArchived}}Archived prompt requests{{else}}Your prompt requests{{end}}</h3>
 {{range .PromptRequests}}
 <a href="/{{.RepoURL}}/prompt-requests/{{.ID}}" class="card card-link">
   <div class="pr-title">
@@ -29,12 +34,36 @@
     {{if gt .RevisionCount 0}}<span>{{.RevisionCount}} revisions</span>{{end}}
     <span>{{.CreatedAt.Format "Jan 2, 2006"}}</span>
   </div>
+  {{if $.ShowArchived}}
+  <span class="card-action" role="button" tabindex="0"
+        aria-label="Unarchive prompt"
+        onclick="event.preventDefault(); event.stopPropagation(); fetch('/{{.RepoURL}}/prompt-requests/{{.ID}}/unarchive', {method:'POST'}).then(function(){location.reload()});"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 5h12v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5z"/><path d="M8 11V7"/><path d="M6 9l2-2 2 2"/>
+    </svg>
+  </span>
+  {{else}}
+  <span class="card-action" role="button" tabindex="0"
+        aria-label="Archive prompt"
+        onclick="event.preventDefault(); event.stopPropagation(); var msg='Archive this prompt request?'; {{if .IssueURL}}msg+=' The linked GitHub issue will remain open.';{{end}} if(confirm(msg)){fetch('/{{.RepoURL}}/prompt-requests/{{.ID}}/archive', {method:'POST'}).then(function(){location.reload()});}"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 5h12v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5z"/><path d="M8 7v4"/><path d="M6 9l2 2 2-2"/>
+    </svg>
+  </span>
+  {{end}}
 </a>
 {{end}}
 {{else}}
 <div class="empty-state">
+  {{if .ShowArchived}}
+  <h2>No archived prompt requests</h2>
+  <p>You haven't archived any prompt requests yet.</p>
+  {{else}}
   <h2>No prompt requests yet</h2>
   <p>Enter a repository URL above to get started.</p>
+  {{end}}
 </div>
 {{end}}
 {{end}}

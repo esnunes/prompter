@@ -1,0 +1,11 @@
+{{define "archive_banner_fragment.html"}}
+<div class="archive-banner" id="archive-banner">
+  <span>This prompt request is archived.</span>
+  <form hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/unarchive"
+        hx-target="#archive-banner"
+        hx-swap="outerHTML"
+        style="display:inline;">
+    <button type="submit" class="btn btn-sm btn-secondary">Unarchive</button>
+  </form>
+</div>
+{{end}}

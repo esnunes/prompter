@@ -79,6 +79,8 @@ func New(queries *db.Queries) (*Server, error) {
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/cancel", s.handleCancel)
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/resend", s.handleResend)
 	mux.HandleFunc("DELETE /github.com/{org}/{repo}/prompt-requests/{id}", s.handleDelete)
+	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/archive", s.handleArchive)
+	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/unarchive", s.handleUnarchive)
 	mux.HandleFunc("GET /api/sidebar", s.handleSidebarFragment)
 
 	s.httpSrv = &http.Server{Handler: mux}
@@ -110,6 +112,7 @@ func parsePages() (map[string]*template.Template, error) {
 		"message_fragment.html",
 		"status_fragment.html",
 		"sidebar.html",
+		"archive_banner_fragment.html",
 	}
 
 	pages := make(map[string]*template.Template, len(pageNames))
