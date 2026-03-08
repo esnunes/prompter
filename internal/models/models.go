@@ -33,6 +33,13 @@ type PromptRequest struct {
 	LatestAssistantAt *time.Time
 }
 
+type RepositorySummary struct {
+	ID            int64
+	URL           string
+	ActivePRCount int
+	LastActivity  time.Time
+}
+
 type Message struct {
 	ID              int64
 	PromptRequestID int64

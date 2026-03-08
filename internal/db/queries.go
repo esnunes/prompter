@@ -40,6 +40,34 @@ func (q *Queries) ListRepositories() ([]models.Repository, error) {
 	return results, rows.Err()
 }
 
+func (q *Queries) ListRepositorySummaries() ([]models.RepositorySummary, error) {
+	rows, err := q.db.Query(`
+		SELECT r.id, r.url,
+		       COUNT(CASE WHEN pr.archived = 0 THEN 1 END) as active_pr_count,
+		       MAX(pr.updated_at) as last_activity
+		FROM repositories r
+		JOIN prompt_requests pr ON pr.repository_id = r.id
+		WHERE pr.status != 'deleted'
+		GROUP BY r.id
+		ORDER BY last_activity DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("listing repository summaries: %w", err)
+	}
+	defer rows.Close()
+
+	var results []models.RepositorySummary
+	for rows.Next() {
+		var rs models.RepositorySummary
+		var lastActivity string
+		if err := rows.Scan(&rs.ID, &rs.URL, &rs.ActivePRCount, &lastActivity); err != nil {
+			return nil, fmt.Errorf("scanning repository summary: %w", err)
+		}
+		rs.LastActivity, _ = time.Parse(time.DateTime, lastActivity)
+		results = append(results, rs)
+	}
+	return results, rows.Err()
+}
+
 func (q *Queries) UpsertRepository(url, localPath string) (*models.Repository, error) {
 	_, err := q.db.Exec(
 		`INSERT INTO repositories (url, local_path) VALUES (?, ?)
