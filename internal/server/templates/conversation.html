@@ -7,6 +7,9 @@
   {{if .PromptRequest.IssueURL}}
   <a href="{{deref .PromptRequest.IssueURL}}" target="_blank" class="btn btn-sm btn-secondary">View Issue</a>
   {{end}}
+  <form method="POST" action="/github.com/{{.Org}}/{{.Repo}}/prompt-requests" style="margin:0;">
+    <button type="submit" class="btn btn-primary btn-sm">New prompt request</button>
+  </form>
 </div>
 {{end}}
 
