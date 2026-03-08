@@ -92,6 +92,7 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex: 1;
 }
 
 .header h1 {
