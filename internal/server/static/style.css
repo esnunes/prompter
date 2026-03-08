@@ -404,9 +404,7 @@ label {
 
 /* Two-column conversation layout */
 .container:has(.conversation-wrapper) {
-  padding-top: 0;
-  padding-bottom: 0;
-  padding-right: 0;
+  padding: 0;
 }
 
 .conversation-wrapper {
