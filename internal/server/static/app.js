@@ -87,6 +87,30 @@ setInterval(updateElapsedTimers, 1000);
 
   document.addEventListener("DOMContentLoaded", function () {
     renderMarkdown();
+
+    // Auto-scroll and focus on initial conversation page load.
+    // Skip if URL has a hash fragment (e.g., #revision-3) to preserve
+    // native anchor scroll from revision sidebar links.
+    if (!window.location.hash && document.getElementById("conversation")) {
+      // Scroll instantly (no animation) to avoid visual jank on load.
+      var c = document.getElementById("conversation");
+      var q = document.getElementById("question-form");
+      if (q) {
+        var target = q.previousElementSibling || q;
+        target.scrollIntoView({ behavior: "instant", block: "start" });
+      } else if (c) {
+        c.scrollTo({ top: c.scrollHeight, behavior: "instant" });
+      }
+
+      // Focus textarea unless questionnaire is showing (textarea hidden)
+      // or on mobile where keyboard would disrupt scroll position.
+      if (!q && window.innerWidth >= 769) {
+        var textarea = document.querySelector(".chat-form textarea");
+        if (textarea && !textarea.disabled) {
+          textarea.focus();
+        }
+      }
+    }
   });
 
   document.addEventListener("htmx:afterSwap", function (e) {
