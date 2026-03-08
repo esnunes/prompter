@@ -382,7 +382,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Append processing status div that starts polling
 	entry := s.getRepoStatus(id)
-	fmt.Fprintf(w, `<div id="repo-status" class="repo-status" hx-get="%s" hx-trigger="every 2s" hx-swap="outerHTML" data-started-at="%d">`, pollURL, entry.StartedAt.Unix())
+	fmt.Fprintf(w, `<div id="repo-status" class="repo-status" hx-get="%s" hx-trigger="every 2s" hx-swap="morph:outerHTML" data-started-at="%d">`, pollURL, entry.StartedAt.Unix())
 	fmt.Fprint(w, `<div class="processing-indicator"><div class="spinner"></div><span class="processing-text">Thinking...</span><span class="elapsed-timer"></span></div>`)
 	fmt.Fprintf(w, `<form hx-post="%s" hx-target="#repo-status" hx-swap="outerHTML" hx-disabled-elt="find button" style="display:inline;"><button type="submit" class="btn btn-sm btn-secondary">Cancel</button></form>`, cancelURL)
 	fmt.Fprint(w, `</div>`)

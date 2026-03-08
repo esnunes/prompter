@@ -1,12 +1,12 @@
 <aside class="prompt-sidebar" id="prompt-sidebar"
        hx-get="{{.PollURL}}"
        hx-trigger="every 3s"
-       hx-swap="outerHTML">
+       hx-swap="morph:outerHTML">
   <h3 class="sidebar-heading">Prompts</h3>
   {{if .Items}}
   <ul class="prompt-list">
     {{range .Items}}
-    <li class="prompt-list-item{{if eq .ID $.CurrentID}} prompt-list-item-active{{end}}{{if .Unread}} prompt-list-item-unread{{end}}">
+    <li id="prompt-{{.ID}}" class="prompt-list-item{{if eq .ID $.CurrentID}} prompt-list-item-active{{end}}{{if .Unread}} prompt-list-item-unread{{end}}">
       <a href="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.ID}}" class="prompt-list-link">
         <div class="prompt-list-title">
           {{if .Title}}{{.Title}}{{else}}Untitled{{end}}
