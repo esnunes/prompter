@@ -111,4 +111,32 @@ setInterval(updateElapsedTimers, 1000);
       }
     }
   });
+
+  // Enter-to-send: submit chat form on Enter, newline on Shift+Enter
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter") return;
+    var textarea = e.target;
+    if (!textarea.matches(".chat-form textarea")) return;
+
+    // Allow Shift+Enter to insert newline (default behavior)
+    if (e.shiftKey) return;
+
+    // Don't submit during IME composition (CJK input)
+    if (e.isComposing || e.keyCode === 229) return;
+
+    e.preventDefault();
+
+    // Don't submit empty/whitespace-only messages
+    if (textarea.value.trim() === "") return;
+
+    // Don't submit if textarea is disabled (processing in progress)
+    if (textarea.disabled) return;
+
+    // Submit via the form's submit button to keep HTMX pipeline intact
+    var form = textarea.closest("form");
+    if (form) {
+      var btn = form.querySelector('button[type="submit"]');
+      if (btn && !btn.disabled) btn.click();
+    }
+  });
 })();
