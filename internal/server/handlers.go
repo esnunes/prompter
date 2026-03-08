@@ -251,6 +251,13 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 			repoStatus = "ready"
 		}
 	}
+	// When status is "responded", the assistant message is already in the DB
+	// and will be rendered by the template. Treat as "ready" for template
+	// purposes. Do NOT delete from the map — an active polling tab may still
+	// need to consume "responded" via handleRepoStatus.
+	if repoStatus == "responded" {
+		repoStatus = "ready"
+	}
 
 	var repoStartedAt int64
 	if !statusEntry.StartedAt.IsZero() {
