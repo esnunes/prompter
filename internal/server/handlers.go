@@ -325,7 +325,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userMessage := r.FormValue("message")
+	userMessage := strings.TrimSpace(r.FormValue("message"))
 	// If no direct message, try assembling from multi-question form fields
 	if userMessage == "" {
 		userMessage = assembleQuestionAnswers(r)
