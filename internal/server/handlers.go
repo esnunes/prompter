@@ -46,28 +46,21 @@ type basePageData struct {
 
 type dashboardData struct {
 	basePageData
-	PromptRequests []models.PromptRequest
-	ShowArchived   bool
+	Repositories []models.RepositorySummary
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	showArchived := r.URL.Query().Get("archived") == "1"
-	prs, err := s.queries.ListPromptRequests(showArchived)
+	repos, err := s.queries.ListRepositorySummaries()
 	if err != nil {
-		log.Printf("listing prompt requests: %v", err)
+		log.Printf("listing repository summaries: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	// Sidebar always gets active prompts
-	sidebarPRs := prs
-	if showArchived {
-		sidebarPRs, _ = s.queries.ListPromptRequests(false)
-	}
+	sidebarPRs, _ := s.queries.ListPromptRequests(false)
 	sidebar := s.buildSidebar(sidebarPRs, "all", 0)
 	s.renderPage(w, "dashboard.html", dashboardData{
-		basePageData:   basePageData{Sidebar: sidebar},
-		PromptRequests: prs,
-		ShowArchived:   showArchived,
+		basePageData: basePageData{Sidebar: sidebar},
+		Repositories: repos,
 	})
 }
 
