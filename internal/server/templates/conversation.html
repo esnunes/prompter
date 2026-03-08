@@ -133,7 +133,7 @@
             <button type="submit" class="btn btn-sm btn-primary">Retry</button>
           </form>
         </div>
-        {{else if and .RepoStatus (ne .RepoStatus "ready")}}
+        {{else if or (eq .RepoStatus "cloning") (eq .RepoStatus "pulling")}}
         <div id="repo-status" class="repo-status"
              hx-get="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/status"
              hx-trigger="every 2s"

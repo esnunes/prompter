@@ -251,6 +251,14 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 			repoStatus = "ready"
 		}
 	}
+	// When status is "responded", the assistant message is already in the DB
+	// and will be rendered by the template. Clear the map entry so that
+	// subsequent actions (e.g., sending a new message) see "ready" state
+	// and can trigger a new Claude call.
+	if repoStatus == "responded" {
+		s.repoStatus.Delete(id)
+		repoStatus = "ready"
+	}
 
 	var repoStartedAt int64
 	if !statusEntry.StartedAt.IsZero() {
