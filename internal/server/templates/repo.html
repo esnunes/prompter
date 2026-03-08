@@ -2,6 +2,11 @@
 
 {{define "header-actions"}}
 <a href="/" class="btn btn-secondary btn-sm">&larr; Dashboard</a>
+{{if not .Error}}
+<form method="POST" action="/github.com/{{.Org}}/{{.Repo}}/prompt-requests">
+  <button type="submit" class="btn btn-primary btn-sm">New prompt request</button>
+</form>
+{{end}}
 {{end}}
 
 {{define "content"}}
@@ -14,18 +19,11 @@
 {{else}}
 <div class="dashboard-header">
   <h2>{{.RepoURL}}</h2>
-  <div style="display:flex;gap:var(--space-3);align-items:center;">
-    <label class="archive-toggle">
-      <input type="checkbox" {{if .ShowArchived}}checked{{end}}
-             onchange="window.location.href = this.checked ? '?archived=1' : window.location.pathname">
-      Show archived
-    </label>
-    {{if not .ShowArchived}}
-    <form method="POST" action="/github.com/{{.Org}}/{{.Repo}}/prompt-requests">
-      <button type="submit" class="btn btn-primary">New prompt request</button>
-    </form>
-    {{end}}
-  </div>
+  <label class="archive-toggle">
+    <input type="checkbox" {{if .ShowArchived}}checked{{end}}
+           onchange="window.location.href = this.checked ? '?archived=1' : window.location.pathname">
+    Show archived
+  </label>
 </div>
 
 {{if .PromptRequests}}
