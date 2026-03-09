@@ -435,8 +435,16 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
+		// Ensure "prompter" label exists (best-effort, don't block publish)
+		var labels []string
+		if err := github.EnsureLabel(r.Context(), pr.RepoURL, github.LabelName); err != nil {
+			log.Printf("warning: ensuring label %q: %v", github.LabelName, err)
+		} else {
+			labels = []string{github.LabelName}
+		}
+
 		// Create new issue
-		issue, err := github.CreateIssue(r.Context(), pr.RepoURL, issueTitle, body)
+		issue, err := github.CreateIssue(r.Context(), pr.RepoURL, issueTitle, body, labels)
 		if err != nil {
 			log.Printf("creating issue: %v", err)
 			http.Error(w, fmt.Sprintf("Failed to create GitHub issue: %v", err), http.StatusInternalServerError)

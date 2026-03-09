@@ -9,19 +9,41 @@ import (
 	"strings"
 )
 
+const LabelName = "prompter"
+
 type Issue struct {
 	Number int    `json:"number"`
 	URL    string `json:"url"`
 }
 
-func CreateIssue(ctx context.Context, repoURL, title, body string) (*Issue, error) {
+// EnsureLabel creates a label in the repository if it does not already exist.
+// Returns nil if the label was created or already exists.
+func EnsureLabel(ctx context.Context, repoURL, name string) error {
+	ghRepo := toGHRepo(repoURL)
+	cmd := exec.CommandContext(ctx, "gh", "label", "create", name, "--repo", ghRepo)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(output), "already exists") {
+			return nil
+		}
+		return fmt.Errorf("ensuring label %q: %s", name, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func CreateIssue(ctx context.Context, repoURL, title, body string, labels []string) (*Issue, error) {
 	ghRepo := toGHRepo(repoURL)
 
-	cmd := exec.CommandContext(ctx, "gh", "issue", "create",
+	args := []string{"issue", "create",
 		"--repo", ghRepo,
 		"--title", title,
 		"--body", body,
-	)
+	}
+	for _, l := range labels {
+		args = append(args, "--label", l)
+	}
+
+	cmd := exec.CommandContext(ctx, "gh", args...)
 
 	output, err := cmd.Output()
 	if err != nil {
