@@ -1,0 +1,324 @@
+// gotk thin client — connects WebSocket, scans gotk-* attributes,
+// sends commands, applies instructions.
+(function() {
+  "use strict";
+
+  var ws = null;
+  var refCounter = 0;
+  var pendingLoading = {};  // ref -> {el, originalText}
+  var registeredFns = {};
+  var reconnectAttempt = 0;
+  var reconnectDelays = [0, 2000, 5000, 10000, 30000];
+  var boundElements = new WeakSet();
+
+  // Public API
+  window.gotk = {
+    register: function(name, fn) {
+      registeredFns[name] = fn;
+    }
+  };
+
+  function nextRef() {
+    refCounter++;
+    return String(refCounter);
+  }
+
+  // --- WebSocket ---
+
+  function connect() {
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    var url = proto + "//" + location.host + "/ws";
+    ws = new WebSocket(url);
+
+    ws.onopen = function() {
+      reconnectAttempt = 0;
+      document.body.classList.add("gotk-connected");
+      document.body.classList.remove("gotk-disconnected");
+    };
+
+    ws.onclose = function() {
+      document.body.classList.remove("gotk-connected");
+      document.body.classList.add("gotk-disconnected");
+      scheduleReconnect();
+    };
+
+    ws.onerror = function() {};
+
+    ws.onmessage = function(e) {
+      var msg;
+      try { msg = JSON.parse(e.data); } catch(_) { return; }
+      handleResponse(msg);
+    };
+  }
+
+  function scheduleReconnect() {
+    var delay = reconnectDelays[Math.min(reconnectAttempt, reconnectDelays.length - 1)];
+    reconnectAttempt++;
+    setTimeout(function() {
+      connect();
+    }, delay);
+  }
+
+  function send(cmd, payload, ref) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ cmd: cmd, payload: payload || {}, ref: ref || "" }));
+  }
+
+  // --- Response handling ---
+
+  function handleResponse(msg) {
+    // Restore gotk-loading element
+    if (msg.ref && pendingLoading[msg.ref]) {
+      var info = pendingLoading[msg.ref];
+      info.el.textContent = info.originalText;
+      info.el.disabled = false;
+      delete pendingLoading[msg.ref];
+    }
+
+    if (msg.error) {
+      console.warn("gotk:", msg.error);
+    }
+
+    if (msg.ins) {
+      for (var i = 0; i < msg.ins.length; i++) {
+        applyInstruction(msg.ins[i]);
+      }
+    }
+  }
+
+  // --- Instruction application ---
+
+  function applyInstruction(ins) {
+    switch (ins.op) {
+      case "html":
+        applyHTML(ins);
+        break;
+      case "template":
+        applyTemplate(ins);
+        break;
+      case "populate":
+        applyPopulate(ins);
+        break;
+      case "navigate":
+        applyNavigate(ins);
+        break;
+      case "attr-set":
+        var el = document.querySelector(ins.target);
+        if (el) el.setAttribute(ins.attr, ins.value || "");
+        else console.warn("gotk: target not found:", ins.target);
+        break;
+      case "attr-remove":
+        var el2 = document.querySelector(ins.target);
+        if (el2) el2.removeAttribute(ins.attr);
+        else console.warn("gotk: target not found:", ins.target);
+        break;
+      case "set-value":
+        var el3 = document.querySelector(ins.target);
+        if (el3) el3.value = ins.value || "";
+        else console.warn("gotk: target not found:", ins.target);
+        break;
+      case "dispatch":
+        var el4 = document.querySelector(ins.target);
+        if (el4) el4.dispatchEvent(new CustomEvent(ins.event, { detail: ins.detail || {}, bubbles: true }));
+        else console.warn("gotk: target not found:", ins.target);
+        break;
+      case "focus":
+        var el5 = document.querySelector(ins.target);
+        if (el5) el5.focus();
+        else console.warn("gotk: target not found:", ins.target);
+        break;
+      case "exec":
+        var fn = registeredFns[ins.name];
+        if (fn) fn(ins.args || {});
+        else console.warn("gotk: unknown function:", ins.name);
+        break;
+      case "cmd":
+        send(ins.cmd, ins.payload);
+        break;
+      default:
+        console.warn("gotk: unknown instruction op:", ins.op);
+    }
+  }
+
+  function applyHTML(ins) {
+    var target = document.querySelector(ins.target);
+    if (!target) { console.warn("gotk: target not found:", ins.target); return; }
+
+    var mode = ins.mode || "replace";
+    if (mode === "remove") {
+      target.remove();
+      return;
+    }
+    if (mode === "replace") {
+      target.innerHTML = ins.html;
+      scanElement(target);
+    } else if (mode === "append") {
+      var tmp = document.createElement("div");
+      tmp.innerHTML = ins.html;
+      while (tmp.firstChild) {
+        var child = tmp.firstChild;
+        target.appendChild(child);
+        if (child.nodeType === 1) scanElement(child);
+      }
+    } else if (mode === "prepend") {
+      var tmp2 = document.createElement("div");
+      tmp2.innerHTML = ins.html;
+      var first = target.firstChild;
+      while (tmp2.firstChild) {
+        var child2 = tmp2.firstChild;
+        target.insertBefore(child2, first);
+        if (child2.nodeType === 1) scanElement(child2);
+      }
+    }
+  }
+
+  function applyTemplate(ins) {
+    var source = document.querySelector(ins.source);
+    var target = document.querySelector(ins.target);
+    if (!source || !target) {
+      console.warn("gotk: template source/target not found:", ins.source, ins.target);
+      return;
+    }
+    var clone = source.content.cloneNode(true);
+    target.innerHTML = "";
+    target.appendChild(clone);
+    scanElement(target);
+  }
+
+  function applyPopulate(ins) {
+    var target = document.querySelector(ins.target);
+    if (!target) { console.warn("gotk: target not found:", ins.target); return; }
+    var data = ins.data || {};
+    for (var key in data) {
+      var el = target.querySelector('[name="' + key + '"]');
+      if (el) el.value = data[key];
+    }
+  }
+
+  function applyNavigate(ins) {
+    if (ins.url) {
+      history.pushState(null, "", ins.url);
+    }
+    if (ins.target && ins.html) {
+      var target = document.querySelector(ins.target);
+      if (target) {
+        target.innerHTML = ins.html;
+        scanElement(target);
+      }
+    }
+  }
+
+  // --- Payload collection ---
+
+  function collectPayload(el) {
+    var payload = {};
+
+    // gotk-payload (lowest priority)
+    var payloadJSON = el.getAttribute("gotk-payload");
+    if (payloadJSON) {
+      try { payload = JSON.parse(payloadJSON); } catch(_) {}
+    }
+
+    // gotk-collect (middle priority)
+    var collectSel = el.getAttribute("gotk-collect");
+    if (collectSel) {
+      var container = document.querySelector(collectSel);
+      if (container) {
+        var named = container.querySelectorAll("[name]");
+        for (var i = 0; i < named.length; i++) {
+          var input = named[i];
+          var name = input.getAttribute("name");
+          if (input.type === "checkbox") {
+            if (payload[name] === undefined) payload[name] = [];
+            if (input.checked) {
+              if (Array.isArray(payload[name])) payload[name].push(input.value);
+            }
+          } else if (input.type === "radio") {
+            if (input.checked) payload[name] = input.value;
+          } else if (input.tagName === "SELECT" && input.multiple) {
+            payload[name] = Array.from(input.selectedOptions).map(function(o) { return o.value; });
+          } else {
+            payload[name] = input.value;
+          }
+        }
+      }
+    }
+
+    // gotk-val-* (highest priority)
+    var attrs = el.attributes;
+    for (var j = 0; j < attrs.length; j++) {
+      if (attrs[j].name.indexOf("gotk-val-") === 0) {
+        var key = attrs[j].name.substring(9); // strip "gotk-val-"
+        payload[key] = attrs[j].value;
+      }
+    }
+
+    return payload;
+  }
+
+  // --- DOM scanning ---
+
+  function scanElement(root) {
+    if (!root || !root.querySelectorAll) return;
+
+    // Scan root itself
+    bindElement(root);
+
+    // Scan descendants
+    var els = root.querySelectorAll("[gotk-click],[gotk-navigate]");
+    for (var i = 0; i < els.length; i++) {
+      bindElement(els[i]);
+    }
+  }
+
+  function bindElement(el) {
+    if (boundElements.has(el)) return;
+
+    // gotk-click
+    var clickCmd = el.getAttribute("gotk-click");
+    if (clickCmd) {
+      boundElements.add(el);
+      el.addEventListener("click", function(e) {
+        e.preventDefault();
+        var cmd = el.getAttribute("gotk-click");
+        var payload = collectPayload(el);
+        var ref = nextRef();
+
+        // gotk-loading
+        var loadingText = el.getAttribute("gotk-loading");
+        if (loadingText) {
+          pendingLoading[ref] = { el: el, originalText: el.textContent };
+          el.textContent = loadingText;
+          el.disabled = true;
+        }
+
+        send(cmd, payload, ref);
+      });
+    }
+
+    // gotk-navigate
+    if (el.hasAttribute("gotk-navigate")) {
+      boundElements.add(el);
+      el.addEventListener("click", function(e) {
+        e.preventDefault();
+        var url = el.getAttribute("href") || el.getAttribute("gotk-navigate");
+        if (url) {
+          send("navigate", { url: url }, nextRef());
+        }
+      });
+    }
+  }
+
+  // --- Popstate ---
+
+  window.addEventListener("popstate", function() {
+    send("navigate", { url: location.pathname + location.search }, nextRef());
+  });
+
+  // --- Init ---
+
+  document.addEventListener("DOMContentLoaded", function() {
+    scanElement(document.body);
+    connect();
+  });
+})();
