@@ -574,6 +574,7 @@ func (s *Server) handleUnarchive(w http.ResponseWriter, r *http.Request) {
 }
 
 // asyncEnsureCloned runs clone/pull in the background, updating status in sync.Map.
+// On completion, pushes status to connected clients and auto-sends pending user messages.
 func (s *Server) asyncEnsureCloned(prID int64, repoURL string) {
 	// Serialize clone/pull operations per repo to prevent concurrent git corruption
 	mu := s.lockRepo(repoURL)
@@ -583,9 +584,27 @@ func (s *Server) asyncEnsureCloned(prID int64, repoURL string) {
 	if err != nil {
 		log.Printf("async clone/pull failed for %s: %v", repoURL, err)
 		s.setRepoStatus(prID, "error", err.Error())
+		s.pushStatusUpdate(prID, "error", s.getRepoStatus(prID))
 		return
 	}
 	s.setRepoStatus(prID, "ready", "")
+
+	// Check for pending user message to auto-send
+	lastMsg, msgErr := s.queries.GetLastMessage(prID)
+	if msgErr == nil && lastMsg.Role == "user" {
+		// Atomically transition to "processing" to prevent duplicate Claude calls
+		old := repoStatusEntry{Status: "ready"}
+		if s.repoStatus.CompareAndSwap(prID, old, repoStatusEntry{Status: "processing"}) {
+			ctx, cancel := context.WithCancel(context.Background())
+			s.setRepoStatusProcessing(prID, cancel)
+			s.pushStatusUpdate(prID, "processing", s.getRepoStatus(prID))
+			go s.backgroundSendMessage(ctx, prID)
+			return
+		}
+	}
+
+	// No auto-send needed — push "ready" status
+	s.pushStatusUpdate(prID, "ready", s.getRepoStatus(prID))
 }
 
 type statusFragmentData struct {
@@ -779,6 +798,7 @@ func (s *Server) backgroundSendMessage(ctx context.Context, prID int64) {
 
 	s.setRepoStatus(prID, "responded", "")
 	s.pushAll(s.buildResponsePush(prID, resp.Message, &rawJSON))
+	s.pushSidebarUpdate()
 }
 
 func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
@@ -1210,6 +1230,34 @@ func (s *Server) handleSidebarFragment(w http.ResponseWriter, r *http.Request) {
 	s.renderFragment(w, "sidebar.html", sidebar)
 }
 
+// pushSidebarUpdate renders the sidebar and pushes it to all connected clients.
+func (s *Server) pushSidebarUpdate() {
+	// Fetch all non-archived prompt requests for the sidebar
+	prs, err := s.queries.ListPromptRequests(false)
+	if err != nil {
+		log.Printf("sidebar push: query error: %v", err)
+		return
+	}
+
+	sidebar := s.buildSidebar(prs, "all", 0)
+
+	tmpl, ok := s.pages["sidebar.html"]
+	if !ok {
+		log.Printf("sidebar push: template not found")
+		return
+	}
+
+	var buf strings.Builder
+	if err := tmpl.ExecuteTemplate(&buf, "sidebar.html", sidebar); err != nil {
+		log.Printf("sidebar push: render error: %v", err)
+		return
+	}
+
+	s.pushAll([]gotk.Instruction{
+		{Op: "html", Target: "#prompt-sidebar", HTML: buf.String()},
+	})
+}
+
 // parseRawResponse extracts a claude.Response from the raw JSON stored in the DB.
 func parseRawResponse(rawJSON string) *claude.Response {
 	// The raw JSON is the full claude CLI output: {"type":"result","structured_output":{...},...}
@@ -1235,6 +1283,74 @@ func parseRawResponse(rawJSON string) *claude.Response {
 		return &resp
 	}
 	return nil
+}
+
+// buildStatusPush builds gotk instructions to push a status update to all clients.
+func (s *Server) buildStatusPush(prID int64, status string, entry repoStatusEntry) []gotk.Instruction {
+	var ins []gotk.Instruction
+	var statusHTML string
+
+	switch status {
+	case "cloning":
+		statusHTML = `<div id="repo-status" class="repo-status">` +
+			`<div class="spinner"></div> Cloning repository...</div>`
+	case "pulling":
+		statusHTML = `<div id="repo-status" class="repo-status">` +
+			`<div class="spinner"></div> Pulling latest changes...</div>`
+	case "processing":
+		statusHTML = fmt.Sprintf(
+			`<div id="repo-status" class="repo-status" data-started-at="%d">`+
+				`<div class="processing-indicator"><div class="spinner"></div>`+
+				`<span class="processing-text">Thinking...</span>`+
+				`<span class="elapsed-timer"></span></div>`+
+				`<button gotk-click="cancel-message" gotk-val-prompt_request_id="%d" `+
+				`class="btn btn-sm btn-secondary">Cancel</button></div>`,
+			entry.StartedAt.Unix(), prID)
+	case "cancelled":
+		statusHTML = fmt.Sprintf(
+			`<div id="repo-status" class="repo-status repo-status-cancelled">`+
+				`<span>Request cancelled.</span>`+
+				`<button gotk-click="resend" gotk-val-prompt_request_id="%d" `+
+				`gotk-loading="Resending..." class="btn btn-sm btn-primary">Retry</button></div>`,
+			prID)
+		// Re-enable form on cancel
+		ins = append(ins, gotk.Instruction{Op: "attr-remove", Target: "#message-input", Attr: "disabled"})
+		ins = append(ins, gotk.Instruction{Op: "attr-remove", Target: "#send-btn", Attr: "disabled"})
+	case "error":
+		statusHTML = fmt.Sprintf(
+			`<div id="repo-status" class="repo-status repo-status-error">`+
+				`<span>Error: %s</span>`+
+				`<button gotk-click="retry" gotk-val-prompt_request_id="%d" `+
+				`gotk-loading="Retrying..." class="btn btn-sm btn-secondary">Retry</button></div>`,
+			template.HTMLEscapeString(entry.Error), prID)
+	case "ready":
+		statusHTML = `<div id="repo-status" class="repo-status repo-status-ready">Repository ready!</div>`
+		// Re-enable form
+		ins = append(ins, gotk.Instruction{Op: "attr-remove", Target: "#message-input", Attr: "disabled"})
+		ins = append(ins, gotk.Instruction{Op: "attr-remove", Target: "#send-btn", Attr: "disabled"})
+		ins = append(ins, gotk.Instruction{Op: "focus", Target: "#message-input"})
+	default:
+		return nil
+	}
+
+	// Replace existing #repo-status or append to #conversation
+	ins = append([]gotk.Instruction{
+		{Op: "remove", Target: "#repo-status"},
+		{Op: "html", Target: "#conversation", HTML: statusHTML, Mode: gotk.Append},
+	}, ins...)
+
+	ins = append(ins, gotk.Instruction{Op: "exec", Name: "scrollConversation"})
+	ins = append(ins, gotk.Instruction{Op: "exec", Name: "updateElapsedTimers"})
+
+	return ins
+}
+
+// pushStatusUpdate pushes a status change to all connected clients.
+func (s *Server) pushStatusUpdate(prID int64, status string, entry repoStatusEntry) {
+	ins := s.buildStatusPush(prID, status, entry)
+	if ins != nil {
+		s.pushAll(ins)
+	}
 }
 
 // orgRepoForPR returns the org and repo name for a prompt request.
@@ -1534,7 +1650,6 @@ func (s *Server) registerGotkCommands() {
 		}
 
 		issueTitle := "Prompt Request: " + title
-		org, repoName := s.orgRepoForPR(id)
 
 		bgCtx := context.Background()
 		if pr.IssueNumber != nil {
@@ -1620,18 +1735,14 @@ func (s *Server) registerGotkCommands() {
 		sidebarHTML.WriteString(`<div class="sidebar-archive-action">`)
 		if pr.Archived {
 			sidebarHTML.WriteString(fmt.Sprintf(
-				`<button type="button" class="btn btn-sm btn-secondary btn-block" `+
-					`onclick="fetch('/github.com/%s/%s/prompt-requests/%d/unarchive', {method:'POST'}).then(function(){location.reload()});">Unarchive</button>`,
-				org, repoName, id))
+				`<button gotk-click="unarchive" gotk-val-prompt_request_id="%d" `+
+					`gotk-loading="Unarchiving..." class="btn btn-sm btn-secondary btn-block">Unarchive</button>`,
+				id))
 		} else {
-			archiveMsg := "Archive this prompt request?"
-			if pr.IssueURL != nil {
-				archiveMsg += " The linked GitHub issue will remain open."
-			}
 			sidebarHTML.WriteString(fmt.Sprintf(
-				`<button type="button" class="btn btn-sm btn-secondary btn-block" `+
-					`onclick="if(confirm('%s')){fetch('/github.com/%s/%s/prompt-requests/%d/archive', {method:'POST'}).then(function(){location.reload()});}">Archive</button>`,
-				archiveMsg, org, repoName, id))
+				`<button gotk-click="archive" gotk-val-prompt_request_id="%d" `+
+					`gotk-loading="Archiving..." class="btn btn-sm btn-secondary btn-block">Archive</button>`,
+				id))
 		}
 		sidebarHTML.WriteString(`</div>`)
 
@@ -1656,6 +1767,147 @@ func (s *Server) registerGotkCommands() {
 
 		ctx.Exec("renderMarkdown")
 		ctx.Exec("scrollConversation")
+
+		// Update prompt sidebar (status changed to published)
+		go s.pushSidebarUpdate()
+
+		return nil
+	})
+
+	s.gotkMux.Handle("retry", func(ctx *gotk.Context) error {
+		idStr := ctx.Payload.String("prompt_request_id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			return nil
+		}
+
+		pr, err := s.queries.GetPromptRequest(id)
+		if err != nil {
+			return nil
+		}
+
+		// Re-launch clone/pull
+		cloned, _ := repo.IsCloned(pr.RepoURL)
+		if cloned {
+			s.setRepoStatus(id, "pulling", "")
+		} else {
+			s.setRepoStatus(id, "cloning", "")
+		}
+
+		entry := s.getRepoStatus(id)
+		status := entry.Status
+
+		// Show status immediately
+		ctx.Remove("#repo-status")
+		if status == "cloning" {
+			ctx.HTML("#conversation", `<div id="repo-status" class="repo-status"><div class="spinner"></div> Cloning repository...</div>`, gotk.Append)
+		} else {
+			ctx.HTML("#conversation", `<div id="repo-status" class="repo-status"><div class="spinner"></div> Pulling latest changes...</div>`, gotk.Append)
+		}
+		ctx.Exec("scrollConversation")
+
+		go s.asyncEnsureCloned(id, pr.RepoURL)
+
+		return nil
+	})
+
+	s.gotkMux.Handle("resend", func(ctx *gotk.Context) error {
+		idStr := ctx.Payload.String("prompt_request_id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			return nil
+		}
+
+		// Delete the synthetic cancelled assistant message
+		lastMsg, err := s.queries.GetLastMessage(id)
+		if err == nil && lastMsg.Role == "assistant" && lastMsg.Content == "Request cancelled by user." {
+			s.queries.DeleteMessage(lastMsg.ID)
+		}
+
+		// Launch async Claude call
+		bgCtx, cancel := context.WithCancel(context.Background())
+		s.setRepoStatusProcessing(id, cancel)
+		go s.backgroundSendMessage(bgCtx, id)
+
+		// Show processing indicator
+		entry := s.getRepoStatus(id)
+		processingHTML := fmt.Sprintf(
+			`<div id="repo-status" class="repo-status" data-started-at="%d">`+
+				`<div class="processing-indicator"><div class="spinner"></div>`+
+				`<span class="processing-text">Thinking...</span>`+
+				`<span class="elapsed-timer"></span></div>`+
+				`<button gotk-click="cancel-message" gotk-val-prompt_request_id="%d" `+
+				`class="btn btn-sm btn-secondary">Cancel</button></div>`,
+			entry.StartedAt.Unix(), id)
+
+		ctx.Remove("#repo-status")
+		ctx.HTML("#conversation", processingHTML, gotk.Append)
+		ctx.Exec("scrollConversation")
+		ctx.Exec("updateElapsedTimers")
+
+		// Disable input while processing
+		ctx.AttrSet("#message-input", "disabled", "true")
+		ctx.AttrSet("#send-btn", "disabled", "true")
+
+		return nil
+	})
+
+	s.gotkMux.Handle("archive", func(ctx *gotk.Context) error {
+		idStr := ctx.Payload.String("prompt_request_id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			return nil
+		}
+
+		if err := s.queries.ArchivePromptRequest(id); err != nil {
+			log.Printf("archiving prompt request: %v", err)
+			ctx.Error("#conversation", "Failed to archive")
+			return nil
+		}
+
+		// Conversation page: show archive banner and update sidebar button
+		ctx.HTML("#archive-banner",
+			fmt.Sprintf(`<div class="archive-banner" id="archive-banner">`+
+				`<span>This prompt request is archived.</span>`+
+				`<button gotk-click="unarchive" gotk-val-prompt_request_id="%d" `+
+				`gotk-loading="Unarchiving..." class="btn btn-sm btn-secondary">Unarchive</button></div>`, id))
+		ctx.HTML(".sidebar-archive-action",
+			fmt.Sprintf(`<button gotk-click="unarchive" gotk-val-prompt_request_id="%d" `+
+				`gotk-loading="Unarchiving..." class="btn btn-sm btn-secondary btn-block">Unarchive</button>`, id))
+
+		// Repo list page: remove the card
+		ctx.Remove(fmt.Sprintf("#pr-card-%d", id))
+
+		// Update prompt sidebar
+		go s.pushSidebarUpdate()
+
+		return nil
+	})
+
+	s.gotkMux.Handle("unarchive", func(ctx *gotk.Context) error {
+		idStr := ctx.Payload.String("prompt_request_id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			return nil
+		}
+
+		if err := s.queries.UnarchivePromptRequest(id); err != nil {
+			log.Printf("unarchiving prompt request: %v", err)
+			ctx.Error("#conversation", "Failed to unarchive")
+			return nil
+		}
+
+		// Conversation page: remove archive banner and update sidebar button
+		ctx.HTML("#archive-banner", `<div id="archive-banner"></div>`)
+		ctx.HTML(".sidebar-archive-action",
+			fmt.Sprintf(`<button gotk-click="archive" gotk-val-prompt_request_id="%d" `+
+				`gotk-loading="Archiving..." class="btn btn-sm btn-secondary btn-block">Archive</button>`, id))
+
+		// Repo list page: remove the card
+		ctx.Remove(fmt.Sprintf("#pr-card-%d", id))
+
+		// Update prompt sidebar
+		go s.pushSidebarUpdate()
 
 		return nil
 	})

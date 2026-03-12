@@ -19,12 +19,10 @@
     {{if .PromptRequest.Archived}}
     <div class="archive-banner" id="archive-banner">
       <span>This prompt request is archived.</span>
-      <form hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/unarchive"
-            hx-target="#archive-banner"
-            hx-swap="outerHTML"
-            style="display:inline;">
-        <button type="submit" class="btn btn-sm btn-secondary">Unarchive</button>
-      </form>
+      <button gotk-click="unarchive"
+              gotk-val-prompt_request_id="{{.PromptRequest.ID}}"
+              gotk-loading="Unarchiving..."
+              class="btn btn-sm btn-secondary">Unarchive</button>
     </div>
     {{else}}
     <div id="archive-banner"></div>
@@ -104,39 +102,26 @@
 
         {{if eq .RepoStatus "processing"}}
         <div id="repo-status" class="repo-status"
-             hx-get="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/status"
-             hx-trigger="every 2s"
-             hx-swap="morph:outerHTML"
              data-started-at="{{.RepoStartedAt}}">
           <div class="processing-indicator">
             <div class="spinner"></div>
             <span class="processing-text">Thinking...</span>
             <span class="elapsed-timer"></span>
           </div>
-          <form hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/cancel"
-                hx-target="#repo-status"
-                hx-swap="outerHTML"
-                hx-disabled-elt="find button"
-                style="display:inline;">
-            <button type="submit" class="btn btn-sm btn-secondary">Cancel</button>
-          </form>
+          <button gotk-click="cancel-message"
+                  gotk-val-prompt_request_id="{{.PromptRequest.ID}}"
+                  class="btn btn-sm btn-secondary">Cancel</button>
         </div>
         {{else if eq .RepoStatus "cancelled"}}
         <div id="repo-status" class="repo-status repo-status-cancelled">
           <span>Request cancelled.</span>
-          <form hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/resend"
-                hx-target="#repo-status"
-                hx-swap="outerHTML"
-                hx-disabled-elt="find button"
-                style="display:inline;">
-            <button type="submit" class="btn btn-sm btn-primary">Retry</button>
-          </form>
+          <button gotk-click="resend"
+                  gotk-val-prompt_request_id="{{.PromptRequest.ID}}"
+                  gotk-loading="Resending..."
+                  class="btn btn-sm btn-primary">Retry</button>
         </div>
         {{else if or (eq .RepoStatus "cloning") (eq .RepoStatus "pulling")}}
-        <div id="repo-status" class="repo-status"
-             hx-get="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/status"
-             hx-trigger="every 2s"
-             hx-swap="morph:outerHTML">
+        <div id="repo-status" class="repo-status">
           <div class="spinner"></div>
           {{if eq .RepoStatus "cloning"}}Cloning repository...{{else if eq .RepoStatus "pulling"}}Pulling latest changes...{{else}}Preparing repository...{{end}}
         </div>
@@ -180,13 +165,17 @@
     {{end}}
     <div class="sidebar-archive-action">
       {{if .PromptRequest.Archived}}
-      <button type="button" class="btn btn-sm btn-secondary btn-block"
-              onclick="fetch('/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/unarchive', {method:'POST'}).then(function(){location.reload()});">
+      <button gotk-click="unarchive"
+              gotk-val-prompt_request_id="{{.PromptRequest.ID}}"
+              gotk-loading="Unarchiving..."
+              class="btn btn-sm btn-secondary btn-block">
         Unarchive
       </button>
       {{else}}
-      <button type="button" class="btn btn-sm btn-secondary btn-block"
-              onclick="var msg='Archive this prompt request?'; {{if .PromptRequest.IssueURL}}msg+=' The linked GitHub issue will remain open.';{{end}} if(confirm(msg)){fetch('/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/archive', {method:'POST'}).then(function(){location.reload()});}">
+      <button gotk-click="archive"
+              gotk-val-prompt_request_id="{{.PromptRequest.ID}}"
+              gotk-loading="Archiving..."
+              class="btn btn-sm btn-secondary btn-block">
         Archive
       </button>
       {{end}}

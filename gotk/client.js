@@ -386,6 +386,7 @@
       boundElements.add(el);
       el.addEventListener("click", function(e) {
         e.preventDefault();
+        e.stopPropagation();
         var cmd = el.getAttribute("gotk-click");
         var payload = collectPayload(el);
         var ref = nextRef();
