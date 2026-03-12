@@ -1,5 +1,5 @@
-// gotk thin client — connects WebSocket, scans gotk-* attributes,
-// sends commands, applies instructions.
+// gotk thin client — connects WebSocket, loads WASM, scans gotk-* attributes,
+// routes commands (WASM local or WebSocket), applies instructions.
 (function() {
   "use strict";
 
@@ -11,6 +11,11 @@
   var reconnectDelays = [0, 2000, 5000, 10000, 30000];
   var boundElements = new WeakSet();
 
+  // WASM state
+  var wasmReady = false;
+  var localCmds = null; // Set of command names registered in WASM
+  var wasmExec = null;  // function(cmd, payloadJSON) => resultJSON
+
   // Public API
   window.gotk = {
     register: function(name, fn) {
@@ -21,6 +26,81 @@
   function nextRef() {
     refCounter++;
     return String(refCounter);
+  }
+
+  // --- WASM loading ---
+
+  function initWASM() {
+    if (typeof WebAssembly === "undefined") return;
+
+    // TinyGo WASM requires wasm_exec.js to be loaded first (provides Go class)
+    if (typeof Go === "undefined") return;
+
+    var go = new Go();
+    fetch("/gotk/app.wasm")
+      .then(function(resp) {
+        if (!resp.ok) return null;
+        return WebAssembly.instantiateStreaming(resp, go.importObject);
+      })
+      .then(function(result) {
+        if (!result) return;
+        go.run(result.instance);
+
+        // TinyGo WASM exposes functions via js.Global().Set() from Go side.
+        // The WASM entry point registers listCommands/execCommand on window.
+        if (typeof window.__gotk_listCommands === "function" &&
+            typeof window.__gotk_execCommand === "function") {
+          var cmdsJSON = window.__gotk_listCommands();
+          var cmds = JSON.parse(cmdsJSON);
+          localCmds = new Set(cmds);
+          wasmExec = window.__gotk_execCommand;
+          wasmReady = true;
+        }
+      })
+      .catch(function(err) {
+        console.warn("gotk: WASM load failed, all commands will route to server:", err);
+      });
+  }
+
+  // --- Command dispatch ---
+
+  function dispatchCommand(cmd, payload, ref) {
+    // Try WASM first
+    if (wasmReady && localCmds && localCmds.has(cmd)) {
+      var payloadJSON = JSON.stringify(payload || {});
+      var resultJSON = wasmExec(cmd, payloadJSON);
+      var result;
+      try { result = JSON.parse(resultJSON); } catch(_) { return; }
+
+      // Apply immediate instructions (skip "cmd" ops — handled via async below)
+      if (result.ins) {
+        for (var i = 0; i < result.ins.length; i++) {
+          if (result.ins[i].op !== "cmd") {
+            applyInstruction(result.ins[i]);
+          }
+        }
+      }
+
+      // Dispatch async server commands
+      if (result.async) {
+        for (var j = 0; j < result.async.length; j++) {
+          var ac = result.async[j];
+          send(ac.Cmd || ac.cmd, ac.Payload || ac.payload || {}, nextRef());
+        }
+      }
+
+      // Restore loading state immediately for WASM commands (synchronous)
+      if (ref && pendingLoading[ref]) {
+        var info = pendingLoading[ref];
+        info.el.textContent = info.originalText;
+        info.el.disabled = false;
+        delete pendingLoading[ref];
+      }
+      return;
+    }
+
+    // Fall back to WebSocket
+    send(cmd, payload, ref);
   }
 
   // --- WebSocket ---
@@ -291,7 +371,7 @@
     bindElement(root);
 
     // Scan descendants
-    var els = root.querySelectorAll("[gotk-click],[gotk-navigate]");
+    var els = root.querySelectorAll("[gotk-click],[gotk-navigate],[gotk-on],[gotk-input]");
     for (var i = 0; i < els.length; i++) {
       bindElement(els[i]);
     }
@@ -318,7 +398,7 @@
           el.disabled = true;
         }
 
-        send(cmd, payload, ref);
+        dispatchCommand(cmd, payload, ref);
       });
     }
 
@@ -329,7 +409,54 @@
         e.preventDefault();
         var url = el.getAttribute("href") || el.getAttribute("gotk-navigate");
         if (url) {
-          send("navigate", { url: url }, nextRef());
+          dispatchCommand("navigate", { url: url }, nextRef());
+        }
+      });
+    }
+
+    // gotk-on="event:cmd" — binds arbitrary DOM events to commands
+    var onAttr = el.getAttribute("gotk-on");
+    if (onAttr) {
+      boundElements.add(el);
+      var parts = onAttr.split(":");
+      if (parts.length >= 2) {
+        var eventName = parts[0];
+        var onCmd = parts.slice(1).join(":"); // allow colons in cmd name
+        el.addEventListener(eventName, function(e) {
+          var payload = collectPayload(el);
+          // Include key event metadata under _event
+          if (e instanceof KeyboardEvent) {
+            payload._event = {
+              key: e.key,
+              code: e.code,
+              shiftKey: e.shiftKey,
+              ctrlKey: e.ctrlKey,
+              altKey: e.altKey,
+              metaKey: e.metaKey,
+              isComposing: e.isComposing
+            };
+          }
+          dispatchCommand(onCmd, payload, nextRef());
+        });
+      }
+    }
+
+    // gotk-input="cmd" — sends command on input event with optional debounce
+    var inputCmd = el.getAttribute("gotk-input");
+    if (inputCmd) {
+      boundElements.add(el);
+      var debounceMs = parseInt(el.getAttribute("gotk-debounce") || "0", 10);
+      var debounceTimer = null;
+      el.addEventListener("input", function() {
+        var payload = collectPayload(el);
+        payload.value = el.value;
+        if (debounceMs > 0) {
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(function() {
+            dispatchCommand(inputCmd, payload, nextRef());
+          }, debounceMs);
+        } else {
+          dispatchCommand(inputCmd, payload, nextRef());
         }
       });
     }
@@ -338,13 +465,14 @@
   // --- Popstate ---
 
   window.addEventListener("popstate", function() {
-    send("navigate", { url: location.pathname + location.search }, nextRef());
+    dispatchCommand("navigate", { url: location.pathname + location.search }, nextRef());
   });
 
   // --- Init ---
 
   document.addEventListener("DOMContentLoaded", function() {
     scanElement(document.body);
+    initWASM();
     connect();
   });
 })();
