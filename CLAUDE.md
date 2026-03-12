@@ -1,22 +1,26 @@
 # Prompter
 
 Prompter is a web app that helps generate and publish GitHub issue prompts through
-conversational AI (Claude CLI). Built with Go, SQLite, HTMX (being replaced by gotk),
+conversational AI (Claude CLI). Built with Go, SQLite, gotk (WebSocket command framework),
 and server-rendered HTML templates.
 
 ## Build & Test
 
 ```bash
-go build ./...          # build all packages
-go test ./...           # run all tests
-go vet ./...            # static analysis
+go generate ./cmd/wasm/  # compile WASM frontend commands (requires TinyGo)
+go build ./...            # build all packages
+go test ./...             # run all tests
+go vet ./...              # static analysis
 ```
 
-No frontend build step. CSS/JS are served via `go:embed` from `internal/server/static/`.
+CSS/JS are served via `go:embed` from `internal/server/static/`. WASM binary is compiled
+with TinyGo and embedded from `gotk/app.wasm`. A placeholder exists so `go build` works
+without TinyGo installed (frontend commands fall back to server-side via WebSocket).
 
 ## Project Structure
 
 - `cmd/prompter/main.go` — CLI entry point
+- `cmd/wasm/` — TinyGo WASM entry point (frontend commands compiled to WebAssembly)
 - `internal/server/server.go` — HTTP server, routes, gotk mux setup
 - `internal/server/handlers.go` — HTTP handlers + gotk command handlers
 - `internal/server/templates/` — Go HTML templates (for `go:embed`)
@@ -33,7 +37,7 @@ No frontend build step. CSS/JS are served via `go:embed` from `internal/server/s
 - **Go 1.25.5** with `modernc.org/sqlite` (pure Go, no CGO)
 - **Storage:** `$XDG_CACHE_HOME/prompter/` (or `~/.cache/prompter/`)
 - **CSS:** Theme UI spec with `tokens.css` + `style.css`
-- **No frontend build step** — HTMX + gotk for interactivity
+- **gotk for all interactivity** — server commands via WebSocket, client commands via TinyGo/WASM
 
 ## gotk Framework
 

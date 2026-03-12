@@ -81,9 +81,11 @@ func New(queries *db.Queries) (*Server, error) {
 	}
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
-	// gotk: WebSocket endpoint and thin client JS
+	// gotk: WebSocket endpoint, client JS, WASM runtime and binary
 	mux.HandleFunc("GET /ws", s.gotkMux.ServeWebSocket)
 	mux.HandleFunc("GET /gotk/client.js", gotk.ClientJSHandler())
+	mux.HandleFunc("GET /gotk/wasm_exec.js", gotk.WasmExecJSHandler())
+	mux.HandleFunc("GET /gotk/app.wasm", gotk.AppWASMHandler())
 
 	mux.HandleFunc("GET /{$}", s.handleDashboard)
 	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests", s.handleRepoPage)
