@@ -42,49 +42,6 @@ setInterval(updateElapsedTimers, 1000);
     });
   }
 
-  // Validate question form before submission
-  function validateQuestionForm(form) {
-    var groups = form.querySelectorAll(".question-group");
-    for (var i = 0; i < groups.length; i++) {
-      var inputs = groups[i].querySelectorAll(
-        'input[type="radio"], input[type="checkbox"]'
-      );
-      var anyChecked = false;
-      var otherChecked = false;
-      var otherInput = groups[i].querySelector(".other-input");
-
-      for (var j = 0; j < inputs.length; j++) {
-        if (inputs[j].checked) {
-          anyChecked = true;
-          if (inputs[j].value === "__other__") {
-            otherChecked = true;
-          }
-        }
-      }
-
-      if (!anyChecked) {
-        alert("Please select an option for each question.");
-        return false;
-      }
-
-      if (otherChecked && otherInput && otherInput.value.trim() === "") {
-        otherInput.focus();
-        alert('Please enter a value for "Other".');
-        return false;
-      }
-    }
-    return true;
-  }
-
-  // Hide/show textarea when question blocks appear/disappear
-  function updateMessageFormVisibility() {
-    var messageForm = document.getElementById("message-form");
-    var questionForm = document.getElementById("question-form");
-    if (messageForm) {
-      messageForm.style.display = questionForm ? "none" : "";
-    }
-  }
-
   document.addEventListener("DOMContentLoaded", function () {
     renderMarkdown();
 
@@ -113,35 +70,11 @@ setInterval(updateElapsedTimers, 1000);
     }
   });
 
-  document.addEventListener("htmx:afterSwap", function (e) {
-    renderMarkdown(e.detail.target);
-    updateMessageFormVisibility();
-    updateElapsedTimers();
-
-    // Only scroll when new content is appended to #conversation,
-    // not on status poll swaps which would steal focus from buttons.
-    var target = e.detail.target;
-    if (target && target.id === "conversation") {
-      scrollConversation();
-    }
-  });
-
-  // Validate question forms before HTMX sends
-  document.addEventListener("htmx:confirm", function (e) {
-    var form = e.detail.elt;
-    if (form.closest && form.closest(".question-block")) {
-      if (!validateQuestionForm(form.closest("form") || form)) {
-        e.preventDefault();
-      }
-    }
-  });
-
   // Enter-to-send: submit chat form on Enter, newline on Shift+Enter
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Enter") return;
     var textarea = e.target;
-    // Support both old HTMX form and new gotk form
-    if (textarea.id !== "message-input" && !textarea.matches(".chat-form textarea")) return;
+    if (textarea.id !== "message-input") return;
 
     // Allow Shift+Enter to insert newline (default behavior)
     if (e.shiftKey) return;
@@ -157,16 +90,9 @@ setInterval(updateElapsedTimers, 1000);
     // Don't submit if textarea is disabled (processing in progress)
     if (textarea.disabled) return;
 
-    // Try gotk send button first, fall back to form submit button
     var sendBtn = document.getElementById("send-btn");
     if (sendBtn && !sendBtn.disabled) {
       sendBtn.click();
-      return;
-    }
-    var form = textarea.closest("form");
-    if (form) {
-      var btn = form.querySelector('button[type="submit"]');
-      if (btn && !btn.disabled) btn.click();
     }
   });
 })();
@@ -178,15 +104,7 @@ document.addEventListener("DOMContentLoaded", function () {
       if (typeof scrollConversation === "function") scrollConversation();
     });
 
-    gotk.register("htmxProcess", function (args) {
-      if (typeof htmx !== "undefined" && args && args.selector) {
-        var el = document.querySelector(args.selector);
-        if (el) htmx.process(el);
-      }
-    });
-
     gotk.register("renderMarkdown", function () {
-      // renderMarkdown is defined inside an IIFE, expose it via a closure
       var bubbles = document.querySelectorAll(
         ".message-assistant .message-bubble:not([data-md-rendered]), .revision-content:not([data-md-rendered])"
       );

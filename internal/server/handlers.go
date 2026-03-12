@@ -38,7 +38,6 @@ type sidebarData struct {
 	Items     []sidebarItem
 	Scope     string // "all" (dashboard) or "repo"
 	CurrentID int64  // highlighted item (0 if not on conversation page)
-	PollURL   string // URL for HTMX polling
 }
 
 // Base page data embedded in all page data structs
@@ -296,96 +295,6 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 	s.renderPage(w, "conversation.html", data)
 }
 
-type messageFragmentData struct {
-	PromptRequestID int64
-	Org             string
-	Repo            string
-	Messages        []models.Message
-	Questions       []questionData
-	PromptReady     bool
-}
-
-func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
-	org := r.PathValue("org")
-	repoName := r.PathValue("repo")
-
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.Error(w, "Not Found", http.StatusNotFound)
-		return
-	}
-
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
-
-	userMessage := strings.TrimSpace(r.FormValue("message"))
-	// If no direct message, try assembling from multi-question form fields
-	if userMessage == "" {
-		userMessage = assembleQuestionAnswers(r)
-	}
-	if userMessage == "" {
-		http.Error(w, "Message is required", http.StatusBadRequest)
-		return
-	}
-
-	// Save user message
-	userMsg, err := s.queries.CreateMessage(id, "user", userMessage, nil)
-	if err != nil {
-		log.Printf("saving user message: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	// If repo is not ready, just save and disable form — auto-send kicks in when ready
-	statusEntry := s.getRepoStatus(id)
-	if statusEntry.Status != "" && statusEntry.Status != "ready" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fragment := messageFragmentData{
-			PromptRequestID: id,
-			Org:             org,
-			Repo:            repoName,
-			Messages:        []models.Message{*userMsg},
-		}
-		s.pages["message_fragment.html"].ExecuteTemplate(w, "message_fragment.html", fragment)
-		fmt.Fprint(w, `<script>(function(){var f=document.getElementById('message-form');if(f){f.querySelector('textarea').disabled=true;f.querySelector('button').disabled=true;}})();</script>`)
-		return
-	}
-
-	// Repo is ready — launch async Claude call
-	ctx, cancel := context.WithCancel(context.Background())
-	s.setRepoStatusProcessing(id, cancel)
-	go s.backgroundSendMessage(ctx, id)
-
-	// Return user message bubble + processing status div for polling
-	pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
-	cancelURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/cancel", org, repoName, id)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fragment := messageFragmentData{
-		PromptRequestID: id,
-		Org:             org,
-		Repo:            repoName,
-		Messages:        []models.Message{*userMsg},
-	}
-	s.pages["message_fragment.html"].ExecuteTemplate(w, "message_fragment.html", fragment)
-
-	// Remove any stale #repo-status element (e.g. leftover "Repository ready!" div)
-	// before appending the new processing div to avoid duplicate IDs.
-	fmt.Fprint(w, `<script>(function(){var old=document.getElementById('repo-status');if(old)old.remove();})();</script>`)
-
-	// Append processing status div that starts polling
-	entry := s.getRepoStatus(id)
-	fmt.Fprintf(w, `<div id="repo-status" class="repo-status" hx-get="%s" hx-trigger="every 2s" hx-swap="morph:outerHTML" data-started-at="%d">`, pollURL, entry.StartedAt.Unix())
-	fmt.Fprint(w, `<div class="processing-indicator"><div class="spinner"></div><span class="processing-text">Thinking...</span><span class="elapsed-timer"></span></div>`)
-	fmt.Fprintf(w, `<form hx-post="%s" hx-target="#repo-status" hx-swap="outerHTML" hx-disabled-elt="find button" style="display:inline;"><button type="submit" class="btn btn-sm btn-secondary">Cancel</button></form>`, cancelURL)
-	fmt.Fprint(w, `</div>`)
-
-	// Disable the message form while processing (setTimeout to run after HTMX re-enables hx-disabled-elt)
-	fmt.Fprint(w, `<script>setTimeout(function(){var f=document.getElementById('message-form');if(f){f.querySelector('textarea').disabled=true;f.querySelector('button').disabled=true;}if(typeof updateElapsedTimers==='function')updateElapsedTimers();},0);</script>`)
-}
-
 func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	org := r.PathValue("org")
 	repoName := r.PathValue("repo")
@@ -471,14 +380,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		log.Printf("updating status: %v", err)
 	}
 
-	// Use HX-Redirect for HTMX requests to trigger a full page navigation
-	// (regular http.Redirect would be followed inline, producing malformed DOM)
 	redirectURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d", org, repoName, id)
-	if r.Header.Get("HX-Request") == "true" {
-		w.Header().Set("HX-Redirect", redirectURL)
-		w.WriteHeader(http.StatusOK)
-		return
-	}
 	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
@@ -499,78 +401,6 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, fmt.Sprintf("/github.com/%s/%s/prompt-requests", org, repoName), http.StatusSeeOther)
-}
-
-type archiveBannerData struct {
-	Org           string
-	Repo          string
-	PromptRequest *models.PromptRequest
-}
-
-func (s *Server) handleArchive(w http.ResponseWriter, r *http.Request) {
-	org := r.PathValue("org")
-	repoName := r.PathValue("repo")
-
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.Error(w, "Not Found", http.StatusNotFound)
-		return
-	}
-
-	if err := s.queries.ArchivePromptRequest(id); err != nil {
-		log.Printf("archiving prompt request: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	// If HTMX request (from conversation page), return the archived banner fragment
-	if r.Header.Get("HX-Request") == "true" {
-		pr, _ := s.queries.GetPromptRequest(id)
-		s.renderFragment(w, "archive_banner_fragment.html", archiveBannerData{
-			Org:           org,
-			Repo:          repoName,
-			PromptRequest: pr,
-		})
-		return
-	}
-
-	// Otherwise (from list page), redirect back
-	referer := r.Header.Get("Referer")
-	if referer == "" {
-		referer = fmt.Sprintf("/github.com/%s/%s/prompt-requests", org, repoName)
-	}
-	http.Redirect(w, r, referer, http.StatusSeeOther)
-}
-
-func (s *Server) handleUnarchive(w http.ResponseWriter, r *http.Request) {
-	org := r.PathValue("org")
-	repoName := r.PathValue("repo")
-
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.Error(w, "Not Found", http.StatusNotFound)
-		return
-	}
-
-	if err := s.queries.UnarchivePromptRequest(id); err != nil {
-		log.Printf("unarchiving prompt request: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	// If HTMX request (from conversation page), return empty banner (removes it)
-	if r.Header.Get("HX-Request") == "true" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<div id="archive-banner"></div>`)
-		return
-	}
-
-	// Otherwise (from list page), redirect back
-	referer := r.Header.Get("Referer")
-	if referer == "" {
-		referer = fmt.Sprintf("/github.com/%s/%s/prompt-requests", org, repoName)
-	}
-	http.Redirect(w, r, referer, http.StatusSeeOther)
 }
 
 // asyncEnsureCloned runs clone/pull in the background, updating status in sync.Map.
@@ -607,110 +437,6 @@ func (s *Server) asyncEnsureCloned(prID int64, repoURL string) {
 	s.pushStatusUpdate(prID, "ready", s.getRepoStatus(prID))
 }
 
-type statusFragmentData struct {
-	Status    string
-	Error     string
-	PollURL   string
-	RetryURL  string
-	CancelURL string
-	ResendURL string
-	StartedAt int64 // Unix timestamp, 0 if not processing
-}
-
-func (s *Server) handleRepoStatus(w http.ResponseWriter, r *http.Request) {
-	org := r.PathValue("org")
-	repoName := r.PathValue("repo")
-	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
-
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.Error(w, "Not Found", http.StatusNotFound)
-		return
-	}
-
-	pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
-	retryURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/retry", org, repoName, id)
-
-	entry := s.getRepoStatus(id)
-
-	// Server restart recovery: if no status tracked, check filesystem
-	if entry.Status == "" {
-		cloned, _ := repo.IsCloned(repoURL)
-		if cloned {
-			s.setRepoStatus(id, "ready", "")
-			entry = repoStatusEntry{Status: "ready"}
-		} else {
-			// Auto-start clone
-			s.setRepoStatus(id, "cloning", "")
-			go s.asyncEnsureCloned(id, repoURL)
-			entry = repoStatusEntry{Status: "cloning"}
-		}
-	}
-
-	// If ready, check for a pending user message to auto-send
-	if entry.Status == "ready" {
-		lastMsg, err := s.queries.GetLastMessage(id)
-		if err == nil && lastMsg.Role == "user" {
-			// Atomically transition to "processing" to prevent duplicate Claude calls
-			old := repoStatusEntry{Status: "ready"}
-			if s.repoStatus.CompareAndSwap(id, old, repoStatusEntry{Status: "processing"}) {
-				ctx, cancel := context.WithCancel(context.Background())
-				s.setRepoStatusProcessing(id, cancel)
-				go s.backgroundSendMessage(ctx, id)
-			}
-			entry = s.getRepoStatus(id)
-		}
-	}
-
-	// If responded, deliver the assistant message and stop polling.
-	// We replace #repo-status with the response content plus a script that
-	// moves the messages into #conversation at the correct position.
-	if entry.Status == "responded" {
-		s.repoStatus.Delete(id)
-		lastMsg, err := s.queries.GetLastMessage(id)
-		if err == nil && lastMsg.Role == "assistant" {
-			fragment := messageFragmentData{
-				PromptRequestID: id,
-				Org:             org,
-				Repo:            repoName,
-				Messages:        []models.Message{*lastMsg},
-			}
-			if lastMsg.RawResponse != nil {
-				questions, promptReady := extractQuestionsFromRaw(*lastMsg.RawResponse)
-				fragment.Questions = questions
-				fragment.PromptReady = promptReady
-			}
-
-			// Render the message fragment into a wrapper div that replaces #repo-status
-			// and auto-relocates its children to the end of #conversation via inline script.
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprint(w, `<div id="repo-status" style="display:none">`)
-			s.pages["message_fragment.html"].ExecuteTemplate(w, "message_fragment.html", fragment)
-			fmt.Fprint(w, `</div><script>`)
-			fmt.Fprint(w, `(function(){var s=document.getElementById('repo-status');var c=document.getElementById('conversation');while(s.firstChild){c.appendChild(s.firstChild);}s.remove();htmx.process(c);if(typeof renderMarkdown==='function')renderMarkdown();if(typeof scrollConversation==='function')scrollConversation();else{c.scrollTop=c.scrollHeight;}var f=document.getElementById('message-form');if(f){f.querySelector('textarea').disabled=false;f.querySelector('button').disabled=false;}})();`)
-			fmt.Fprint(w, `</script>`)
-			return
-		}
-	}
-
-	cancelURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/cancel", org, repoName, id)
-	resendURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/resend", org, repoName, id)
-
-	var startedAt int64
-	if !entry.StartedAt.IsZero() {
-		startedAt = entry.StartedAt.Unix()
-	}
-
-	s.renderFragment(w, "status_fragment.html", statusFragmentData{
-		Status:    entry.Status,
-		Error:     entry.Error,
-		PollURL:   pollURL,
-		RetryURL:  retryURL,
-		CancelURL: cancelURL,
-		ResendURL: resendURL,
-		StartedAt: startedAt,
-	})
-}
 
 // backgroundSendMessage processes a pending user message with Claude in a background goroutine.
 // It saves the response to DB and updates the repo status to "responded" or "cancelled".
@@ -801,101 +527,6 @@ func (s *Server) backgroundSendMessage(ctx context.Context, prID int64) {
 	s.pushSidebarUpdate()
 }
 
-func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
-	org := r.PathValue("org")
-	repoName := r.PathValue("repo")
-	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
-
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.Error(w, "Not Found", http.StatusNotFound)
-		return
-	}
-
-	cloned, _ := repo.IsCloned(repoURL)
-	if cloned {
-		s.setRepoStatus(id, "pulling", "")
-	} else {
-		s.setRepoStatus(id, "cloning", "")
-	}
-
-	go s.asyncEnsureCloned(id, repoURL)
-
-	pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
-	retryURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/retry", org, repoName, id)
-
-	s.renderFragment(w, "status_fragment.html", statusFragmentData{
-		Status:   s.getRepoStatus(id).Status,
-		PollURL:  pollURL,
-		RetryURL: retryURL,
-	})
-}
-
-func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
-	org := r.PathValue("org")
-	repoName := r.PathValue("repo")
-
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.Error(w, "Not Found", http.StatusNotFound)
-		return
-	}
-
-	// Call the cancel function if processing
-	entry := s.getRepoStatus(id)
-	if entry.Status == "processing" {
-		if v, ok := s.cancelFuncs.Load(id); ok {
-			if cancel, ok := v.(context.CancelFunc); ok {
-				cancel()
-			}
-		}
-	}
-
-	// Return current status — the background goroutine will transition to "cancelled"
-	pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
-	cancelURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/cancel", org, repoName, id)
-
-	s.renderFragment(w, "status_fragment.html", statusFragmentData{
-		Status:    "processing",
-		PollURL:   pollURL,
-		CancelURL: cancelURL,
-		StartedAt: entry.StartedAt.Unix(),
-	})
-}
-
-func (s *Server) handleResend(w http.ResponseWriter, r *http.Request) {
-	org := r.PathValue("org")
-	repoName := r.PathValue("repo")
-
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.Error(w, "Not Found", http.StatusNotFound)
-		return
-	}
-
-	// Delete the synthetic cancelled assistant message
-	lastMsg, err := s.queries.GetLastMessage(id)
-	if err == nil && lastMsg.Role == "assistant" && lastMsg.Content == "Request cancelled by user." {
-		s.queries.DeleteMessage(lastMsg.ID)
-	}
-
-	// Launch async Claude call
-	ctx, cancel := context.WithCancel(context.Background())
-	s.setRepoStatusProcessing(id, cancel)
-	go s.backgroundSendMessage(ctx, id)
-
-	// Return processing status fragment
-	pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
-	cancelURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/cancel", org, repoName, id)
-	entry := s.getRepoStatus(id)
-
-	s.renderFragment(w, "status_fragment.html", statusFragmentData{
-		Status:    "processing",
-		PollURL:   pollURL,
-		CancelURL: cancelURL,
-		StartedAt: entry.StartedAt.Unix(),
-	})
-}
 
 // buildTimeline interleaves messages and revision markers into a single chronological timeline.
 func buildTimeline(messages []models.Message, revisions []models.Revision) []timelineItem {
@@ -986,65 +617,7 @@ func extractLegacyQuestion(rawJSON string) []questionData {
 	return []questionData{qd}
 }
 
-// assembleQuestionAnswers reads multi-question form fields (q_0, q_0_other, q_1, etc.)
-// and assembles them into a single answer string to send to Claude.
-func assembleQuestionAnswers(r *http.Request) string {
-	var answers []string
-	var headers []string
-
-	for i := 0; ; i++ {
-		key := fmt.Sprintf("q_%d", i)
-		header := r.FormValue(fmt.Sprintf("q_%d_header", i))
-
-		// Check if this question exists in the form
-		values, exists := r.Form[key]
-		if !exists {
-			break
-		}
-
-		otherText := strings.TrimSpace(r.FormValue(fmt.Sprintf("q_%d_other", i)))
-
-		// Build the answer for this question
-		var parts []string
-		for _, v := range values {
-			if v == "__other__" {
-				if otherText != "" {
-					parts = append(parts, "Other: "+otherText)
-				}
-			} else if v != "" {
-				parts = append(parts, v)
-			}
-		}
-
-		if len(parts) > 0 {
-			answers = append(answers, strings.Join(parts, ", "))
-			headers = append(headers, header)
-		}
-	}
-
-	if len(answers) == 0 {
-		return ""
-	}
-
-	// Single question: just the answer, no prefix
-	if len(answers) == 1 {
-		return answers[0]
-	}
-
-	// Multiple questions: prefix each with header or question index
-	var lines []string
-	for i, answer := range answers {
-		if headers[i] != "" {
-			lines = append(lines, headers[i]+": "+answer)
-		} else {
-			lines = append(lines, fmt.Sprintf("Q%d: %s", i+1, answer))
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
 // assembleQuestionAnswersFromPayload assembles question answers from a gotk payload.
-// Mirrors assembleQuestionAnswers but works with gotk.Payload instead of *http.Request.
 func assembleQuestionAnswersFromPayload(p gotk.Payload) string {
 	data := p.Map()
 	var answers []string
@@ -1160,20 +733,10 @@ func (s *Server) buildSidebar(prs []models.PromptRequest, scope string, currentI
 	// so we just need to float processing items to the top.
 	sortSidebarItems(items)
 
-	// Build poll URL
-	pollURL := "/api/sidebar?scope=" + scope
-	if scope == "repo" && len(prs) > 0 {
-		pollURL += "&repo_url=" + prs[0].RepoURL
-	}
-	if currentID != 0 {
-		pollURL += "&current_id=" + strconv.FormatInt(currentID, 10)
-	}
-
 	return sidebarData{
 		Items:     items,
 		Scope:     scope,
 		CurrentID: currentID,
-		PollURL:   pollURL,
 	}
 }
 
@@ -1207,28 +770,6 @@ func sortSidebarItems(items []sidebarItem) {
 	}
 }
 
-// handleSidebarFragment returns the sidebar HTML fragment for HTMX polling.
-func (s *Server) handleSidebarFragment(w http.ResponseWriter, r *http.Request) {
-	scope := r.URL.Query().Get("scope")
-	repoURL := r.URL.Query().Get("repo_url")
-	currentID, _ := strconv.ParseInt(r.URL.Query().Get("current_id"), 10, 64)
-
-	var prs []models.PromptRequest
-	var err error
-	if scope == "repo" && repoURL != "" {
-		prs, err = s.queries.ListPromptRequestsByRepoURL(repoURL, false)
-	} else {
-		prs, err = s.queries.ListPromptRequests(false)
-	}
-	if err != nil {
-		log.Printf("sidebar query error: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	sidebar := s.buildSidebar(prs, scope, currentID)
-	s.renderFragment(w, "sidebar.html", sidebar)
-}
 
 // pushSidebarUpdate renders the sidebar and pushes it to all connected clients.
 func (s *Server) pushSidebarUpdate() {

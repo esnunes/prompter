@@ -89,16 +89,8 @@ func New(queries *db.Queries) (*Server, error) {
 	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests", s.handleRepoPage)
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests", s.handleCreate)
 	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests/{id}", s.handleShow)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/messages", s.handleSendMessage)
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/publish", s.handlePublish)
-	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests/{id}/status", s.handleRepoStatus)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/retry", s.handleRetry)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/cancel", s.handleCancel)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/resend", s.handleResend)
 	mux.HandleFunc("DELETE /github.com/{org}/{repo}/prompt-requests/{id}", s.handleDelete)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/archive", s.handleArchive)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/unarchive", s.handleUnarchive)
-	mux.HandleFunc("GET /api/sidebar", s.handleSidebarFragment)
 
 	s.httpSrv = &http.Server{Handler: mux}
 	return s, nil
@@ -126,10 +118,7 @@ func parsePages() (map[string]*template.Template, error) {
 		"dashboard.html",
 		"repo.html",
 		"conversation.html",
-		"message_fragment.html",
-		"status_fragment.html",
 		"sidebar.html",
-		"archive_banner_fragment.html",
 	}
 
 	pages := make(map[string]*template.Template, len(pageNames))
@@ -252,16 +241,3 @@ func (s *Server) pushAll(ins []gotk.Instruction) {
 	})
 }
 
-func (s *Server) renderFragment(w http.ResponseWriter, name string, data any) {
-	tmpl, ok := s.pages[name]
-	if !ok {
-		log.Printf("fragment template not found: %s", name)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := tmpl.ExecuteTemplate(w, name, data); err != nil {
-		log.Printf("render error (%s): %v", name, err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-	}
-}
