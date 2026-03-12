@@ -744,18 +744,21 @@ func (s *Server) backgroundSendMessage(ctx context.Context, prID int64) {
 			log.Printf("auto-send: cancelled for PR %d", prID)
 			s.queries.CreateMessage(prID, "assistant", "Request cancelled by user.", nil)
 			s.setRepoStatus(prID, "cancelled", "")
+			s.pushAll(s.buildResponsePush(prID, "Request cancelled by user.", nil))
 			return
 		}
 		log.Printf("auto-send: claude error: %v", err)
 		errMsg := fmt.Sprintf("Sorry, I encountered an error: %v", err)
 		s.queries.CreateMessage(prID, "assistant", errMsg, nil)
 		s.setRepoStatus(prID, "responded", "")
+		s.pushAll(s.buildResponsePush(prID, errMsg, nil))
 		return
 	}
 
 	if _, err := s.queries.CreateMessage(prID, "assistant", resp.Message, &rawJSON); err != nil {
 		log.Printf("auto-send: saving assistant message: %v", err)
 		s.setRepoStatus(prID, "error", "Failed to save response")
+		s.pushAll(s.buildResponsePush(prID, "Failed to save response", nil))
 		return
 	}
 
@@ -775,6 +778,7 @@ func (s *Server) backgroundSendMessage(ctx context.Context, prID int64) {
 	}
 
 	s.setRepoStatus(prID, "responded", "")
+	s.pushAll(s.buildResponsePush(prID, resp.Message, &rawJSON))
 }
 
 func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
@@ -1019,6 +1023,75 @@ func assembleQuestionAnswers(r *http.Request) string {
 	return strings.Join(lines, "\n")
 }
 
+// assembleQuestionAnswersFromPayload assembles question answers from a gotk payload.
+// Mirrors assembleQuestionAnswers but works with gotk.Payload instead of *http.Request.
+func assembleQuestionAnswersFromPayload(p gotk.Payload) string {
+	data := p.Map()
+	var answers []string
+	var headers []string
+
+	for i := 0; ; i++ {
+		key := fmt.Sprintf("q_%d", i)
+		header := p.String(fmt.Sprintf("q_%d_header", i))
+
+		raw, exists := data[key]
+		if !exists {
+			break
+		}
+
+		otherText := strings.TrimSpace(p.String(fmt.Sprintf("q_%d_other", i)))
+
+		// Collect values: may be a string (radio) or []any (checkboxes)
+		var values []string
+		switch v := raw.(type) {
+		case string:
+			if v != "" {
+				values = append(values, v)
+			}
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok && s != "" {
+					values = append(values, s)
+				}
+			}
+		}
+
+		var parts []string
+		for _, v := range values {
+			if v == "__other__" {
+				if otherText != "" {
+					parts = append(parts, "Other: "+otherText)
+				}
+			} else {
+				parts = append(parts, v)
+			}
+		}
+
+		if len(parts) > 0 {
+			answers = append(answers, strings.Join(parts, ", "))
+			headers = append(headers, header)
+		}
+	}
+
+	if len(answers) == 0 {
+		return ""
+	}
+
+	if len(answers) == 1 {
+		return answers[0]
+	}
+
+	var lines []string
+	for i, answer := range answers {
+		if headers[i] != "" {
+			lines = append(lines, headers[i]+": "+answer)
+		} else {
+			lines = append(lines, fmt.Sprintf("Q%d: %s", i+1, answer))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // buildSidebar creates sidebar data from a list of prompt requests, merging in
 // processing state from the in-memory repoStatus map and computing unread flags.
 func (s *Server) buildSidebar(prs []models.PromptRequest, scope string, currentID int64) sidebarData {
@@ -1164,6 +1237,119 @@ func parseRawResponse(rawJSON string) *claude.Response {
 	return nil
 }
 
+// orgRepoForPR returns the org and repo name for a prompt request.
+func (s *Server) orgRepoForPR(prID int64) (string, string) {
+	pr, err := s.queries.GetPromptRequest(prID)
+	if err != nil {
+		return "", ""
+	}
+	// RepoURL format: "github.com/org/repo"
+	parts := strings.SplitN(pr.RepoURL, "/", 3)
+	if len(parts) < 3 {
+		return "", ""
+	}
+	return parts[1], parts[2]
+}
+
+// buildResponsePush builds gotk instructions to push a Claude response to the client.
+// It removes the spinner, appends the assistant message, re-enables the form, and triggers
+// markdown rendering and scroll.
+func (s *Server) buildResponsePush(prID int64, message string, rawJSON *string) []gotk.Instruction {
+	var ins []gotk.Instruction
+
+	// Remove spinner
+	ins = append(ins, gotk.Instruction{Op: "html", Target: "#repo-status", Mode: gotk.Remove})
+
+	// Append assistant message
+	msgHTML := `<div class="message message-assistant"><div class="message-bubble">` +
+		template.HTMLEscapeString(message) + `</div></div>`
+	ins = append(ins, gotk.Instruction{Op: "html", Target: "#conversation", HTML: msgHTML, Mode: gotk.Append})
+
+	// Handle questions / prompt-ready from raw response
+	hasQuestions := false
+	if rawJSON != nil {
+		questions, promptReady := extractQuestionsFromRaw(*rawJSON)
+		// Get org/repo for form URLs
+		org, repoName := s.orgRepoForPR(prID)
+		if len(questions) > 0 && org != "" {
+			ins = append(ins, s.buildQuestionPush(prID, org, repoName, questions)...)
+			hasQuestions = true
+		}
+		if promptReady && org != "" {
+			ins = append(ins, s.buildPromptReadyPush(prID, org, repoName)...)
+		}
+	}
+
+	// Re-enable input (but hide message form if questions are shown)
+	ins = append(ins, gotk.Instruction{Op: "attr-remove", Target: "#message-input", Attr: "disabled"})
+	ins = append(ins, gotk.Instruction{Op: "attr-remove", Target: "#send-btn", Attr: "disabled"})
+	if hasQuestions {
+		ins = append(ins, gotk.Instruction{Op: "attr-set", Target: "#message-form", Attr: "style", Value: "display:none"})
+	}
+
+	// Render markdown and scroll
+	ins = append(ins, gotk.Instruction{Op: "exec", Name: "renderMarkdown"})
+	ins = append(ins, gotk.Instruction{Op: "exec", Name: "scrollConversation"})
+
+	return ins
+}
+
+// buildQuestionPush builds gotk instructions to display Claude's questions.
+func (s *Server) buildQuestionPush(prID int64, org, repoName string, questions []questionData) []gotk.Instruction {
+	var html strings.Builder
+	html.WriteString(`<div class="question-block" id="question-form">`)
+	html.WriteString(`<div id="question-form-fields">`)
+	html.WriteString(fmt.Sprintf(`<input type="hidden" name="prompt_request_id" value="%d">`, prID))
+
+	for _, q := range questions {
+		html.WriteString(`<div class="question-group">`)
+		if q.Header != "" {
+			html.WriteString(fmt.Sprintf(`<span class="question-header">%s</span>`, template.HTMLEscapeString(q.Header)))
+		}
+		html.WriteString(fmt.Sprintf(`<h4>%s</h4>`, template.HTMLEscapeString(q.Text)))
+		html.WriteString(fmt.Sprintf(`<input type="hidden" name="q_%d_header" value="%s">`, q.Index, template.HTMLEscapeString(q.Header)))
+		html.WriteString(`<div class="options-list">`)
+		for _, opt := range q.Options {
+			inputType := "radio"
+			if q.MultiSelect {
+				inputType = "checkbox"
+			}
+			html.WriteString(fmt.Sprintf(`<label class="option-item"><input type="%s" name="q_%d" value="%s"><div><div class="option-label">%s</div><div class="option-description">%s</div></div></label>`,
+				inputType, q.Index, template.HTMLEscapeString(opt.Label), template.HTMLEscapeString(opt.Label), template.HTMLEscapeString(opt.Description)))
+		}
+		inputType := "radio"
+		if q.MultiSelect {
+			inputType = "checkbox"
+		}
+		html.WriteString(fmt.Sprintf(`<label class="option-item other-option"><input type="%s" name="q_%d" value="__other__"><div><div class="option-label">Other</div></div></label>`, inputType, q.Index))
+		html.WriteString(`</div>`)
+		html.WriteString(fmt.Sprintf(`<input type="text" name="q_%d_other" class="other-input" placeholder="Type your answer..." maxlength="500">`, q.Index))
+		html.WriteString(`</div>`)
+	}
+	html.WriteString(`</div>`) // close #question-form-fields
+	html.WriteString(`<div class="mt-4">`)
+	html.WriteString(`<button gotk-click="answer-question" gotk-collect="#question-form-fields" gotk-loading="Sending..." class="btn btn-primary">Answer</button>`)
+	html.WriteString(`</div>`)
+	html.WriteString(`</div>`)
+
+	return []gotk.Instruction{
+		{Op: "html", Target: "#conversation", HTML: html.String(), Mode: gotk.Append},
+	}
+}
+
+// buildPromptReadyPush builds gotk instructions to display the publish form.
+func (s *Server) buildPromptReadyPush(prID int64, org, repoName string) []gotk.Instruction {
+	publishHTML := fmt.Sprintf(`<div class="prompt-ready" id="publish-form">`+
+		`<p>Prompt is ready to publish!</p>`+
+		`<button gotk-click="publish" gotk-val-prompt_request_id="%d" `+
+		`gotk-loading="Publishing..." class="btn btn-primary">Publish to GitHub</button>`+
+		`</div>`, prID)
+
+	return []gotk.Instruction{
+		{Op: "html", Target: "#conversation", HTML: publishHTML, Mode: gotk.Append},
+	}
+}
+
 // registerGotkCommands registers gotk command handlers on the mux.
 func (s *Server) registerGotkCommands() {
 	s.gotkMux.Handle("send-message", func(ctx *gotk.Context) error {
@@ -1174,8 +1360,6 @@ func (s *Server) registerGotkCommands() {
 			return nil
 		}
 
-		org := ctx.Payload.String("org")
-		repoName := ctx.Payload.String("repo")
 		message := strings.TrimSpace(ctx.Payload.String("message"))
 		if message == "" {
 			return nil
@@ -1209,31 +1393,269 @@ func (s *Server) registerGotkCommands() {
 		s.setRepoStatusProcessing(id, cancel)
 		go s.backgroundSendMessage(bgCtx, id)
 
-		// Show processing indicator (HTMX-based polling for response)
-		pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
-		cancelURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/cancel", org, repoName, id)
+		// Show processing indicator with gotk-based cancel
 		entry := s.getRepoStatus(id)
 		processingHTML := fmt.Sprintf(
-			`<div id="repo-status" class="repo-status" hx-get="%s" hx-trigger="every 2s" hx-swap="morph:outerHTML" data-started-at="%d">`+
+			`<div id="repo-status" class="repo-status" data-started-at="%d">`+
 				`<div class="processing-indicator"><div class="spinner"></div>`+
 				`<span class="processing-text">Thinking...</span>`+
 				`<span class="elapsed-timer"></span></div>`+
-				`<form hx-post="%s" hx-target="#repo-status" hx-swap="outerHTML" hx-disabled-elt="find button" style="display:inline;">`+
-				`<button type="submit" class="btn btn-sm btn-secondary">Cancel</button></form></div>`,
-			pollURL, entry.StartedAt.Unix(), cancelURL)
+				`<button gotk-click="cancel-message" gotk-val-prompt_request_id="%d" `+
+				`class="btn btn-sm btn-secondary">Cancel</button></div>`,
+			entry.StartedAt.Unix(), id)
 
 		// Remove any stale #repo-status, then append new one
 		ctx.Remove("#repo-status")
 		ctx.HTML("#conversation", processingHTML, gotk.Append)
 
-		// Re-process HTMX on new content and scroll
-		ctx.Exec("htmxProcess", map[string]any{"selector": "#repo-status"})
 		ctx.Exec("scrollConversation")
 		ctx.Exec("updateElapsedTimers")
 
 		// Disable input while processing
 		ctx.AttrSet("#message-input", "disabled", "true")
 		ctx.AttrSet("#send-btn", "disabled", "true")
+
+		return nil
+	})
+
+	s.gotkMux.Handle("cancel-message", func(ctx *gotk.Context) error {
+		idStr := ctx.Payload.String("prompt_request_id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			return nil
+		}
+
+		entry := s.getRepoStatus(id)
+		if entry.Status == "processing" {
+			if v, ok := s.cancelFuncs.Load(id); ok {
+				if cancel, ok := v.(context.CancelFunc); ok {
+					cancel()
+				}
+			}
+		}
+
+		// The background goroutine will detect cancellation and push UI updates.
+		return nil
+	})
+
+	s.gotkMux.Handle("answer-question", func(ctx *gotk.Context) error {
+		idStr := ctx.Payload.String("prompt_request_id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			ctx.Error("#conversation", "Invalid prompt request ID")
+			return nil
+		}
+
+		message := assembleQuestionAnswersFromPayload(ctx.Payload)
+		if message == "" {
+			return nil
+		}
+
+		// Save user message
+		userMsg, err := s.queries.CreateMessage(id, "user", message, nil)
+		if err != nil {
+			ctx.Error("#conversation", "Failed to save message")
+			return nil
+		}
+
+		// Remove question form, show message form again
+		ctx.Remove("#question-form")
+		ctx.AttrRemove("#message-form", "style")
+
+		// Append user message bubble
+		userHTML := `<div class="message message-user"><div class="message-bubble">` +
+			template.HTMLEscapeString(userMsg.Content) + `</div></div>`
+		ctx.HTML("#conversation", userHTML, gotk.Append)
+
+		// Launch async Claude call
+		bgCtx, cancel := context.WithCancel(context.Background())
+		s.setRepoStatusProcessing(id, cancel)
+		go s.backgroundSendMessage(bgCtx, id)
+
+		// Show processing indicator
+		entry := s.getRepoStatus(id)
+		processingHTML := fmt.Sprintf(
+			`<div id="repo-status" class="repo-status" data-started-at="%d">`+
+				`<div class="processing-indicator"><div class="spinner"></div>`+
+				`<span class="processing-text">Thinking...</span>`+
+				`<span class="elapsed-timer"></span></div>`+
+				`<button gotk-click="cancel-message" gotk-val-prompt_request_id="%d" `+
+				`class="btn btn-sm btn-secondary">Cancel</button></div>`,
+			entry.StartedAt.Unix(), id)
+
+		ctx.Remove("#repo-status")
+		ctx.HTML("#conversation", processingHTML, gotk.Append)
+
+		ctx.Exec("scrollConversation")
+		ctx.Exec("updateElapsedTimers")
+
+		// Disable input while processing
+		ctx.AttrSet("#message-input", "disabled", "true")
+		ctx.AttrSet("#send-btn", "disabled", "true")
+
+		return nil
+	})
+
+	s.gotkMux.Handle("publish", func(ctx *gotk.Context) error {
+		idStr := ctx.Payload.String("prompt_request_id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			ctx.Error("#conversation", "Invalid prompt request ID")
+			return nil
+		}
+
+		pr, err := s.queries.GetPromptRequest(id)
+		if err != nil {
+			ctx.Error("#conversation", "Prompt request not found")
+			return nil
+		}
+
+		gc, err := s.queries.GetLatestGeneratedContent(id)
+		if err != nil {
+			ctx.Error("#conversation", "No generated prompt found. Continue the conversation until the AI generates a prompt.")
+			return nil
+		}
+
+		// Compose issue body
+		copyBlock := "\n\n<details>\n<summary>Copy prompt</summary>\n\n```\n" + gc.Prompt + "\n```\n\n</details>"
+		var body string
+		if gc.Motivation != "" {
+			body = "## Why\n\n" + gc.Motivation + "\n\n## Prompt\n\n" + gc.Prompt + copyBlock
+		} else {
+			body = gc.Prompt + copyBlock
+		}
+
+		title := pr.Title
+		if gc.Title != "" {
+			title = gc.Title
+			s.queries.UpdatePromptRequestTitle(id, title)
+		} else if title == "" {
+			title = "Prompt Request"
+		}
+
+		issueTitle := "Prompt Request: " + title
+		org, repoName := s.orgRepoForPR(id)
+
+		bgCtx := context.Background()
+		if pr.IssueNumber != nil {
+			if err := github.EditIssue(bgCtx, pr.RepoURL, *pr.IssueNumber, body); err != nil {
+				log.Printf("editing issue: %v", err)
+				ctx.Error("#conversation", fmt.Sprintf("Failed to update GitHub issue: %v", err))
+				return nil
+			}
+		} else {
+			var labels []string
+			if err := github.EnsureLabel(bgCtx, pr.RepoURL, github.LabelName); err != nil {
+				log.Printf("warning: ensuring label %q: %v", github.LabelName, err)
+			} else {
+				labels = []string{github.LabelName}
+			}
+
+			issue, err := github.CreateIssue(bgCtx, pr.RepoURL, issueTitle, body, labels)
+			if err != nil {
+				log.Printf("creating issue: %v", err)
+				ctx.Error("#conversation", fmt.Sprintf("Failed to create GitHub issue: %v", err))
+				return nil
+			}
+			if err := s.queries.UpdatePromptRequestIssue(id, issue.Number, issue.URL); err != nil {
+				log.Printf("updating issue info: %v", err)
+			}
+		}
+
+		// Create revision
+		var afterMsgID *int64
+		if lastMsg, err := s.queries.GetLastMessage(id); err == nil {
+			afterMsgID = &lastMsg.ID
+		}
+		rev, err := s.queries.CreateRevision(id, body, afterMsgID)
+		if err != nil {
+			log.Printf("creating revision: %v", err)
+		}
+
+		if err := s.queries.UpdatePromptRequestStatus(id, "published"); err != nil {
+			log.Printf("updating status: %v", err)
+		}
+
+		// Re-fetch PR to get updated issue URL
+		pr, _ = s.queries.GetPromptRequest(id)
+
+		// --- Push UI updates ---
+
+		// Remove publish form
+		ctx.Remove("#publish-form")
+
+		// Update badge to "published"
+		ctx.HTML("#status-badge", "published")
+		ctx.AttrSet("#status-badge", "class", "badge badge-published")
+
+		// Add "View Issue" link in header
+		if pr.IssueURL != nil {
+			issueLink := fmt.Sprintf(`<a href="%s" target="_blank" class="btn btn-sm btn-secondary">View Issue</a>`,
+				template.HTMLEscapeString(*pr.IssueURL))
+			ctx.HTML("#header-actions-extra", issueLink)
+		}
+
+		// Update revision sidebar content
+		var sidebarHTML strings.Builder
+		sidebarHTML.WriteString(`<h3 class="sidebar-heading">Revisions</h3>`)
+		revisions, _ := s.queries.ListRevisions(id)
+		if len(revisions) > 0 {
+			sidebarHTML.WriteString(`<ul class="revision-list">`)
+			for _, r := range revisions {
+				sidebarHTML.WriteString(fmt.Sprintf(
+					`<li class="revision-list-item"><a href="#revision-%d" class="revision-link">`+
+						`<span class="revision-number">Revision %d</span>`+
+						`<time class="revision-time text-sm text-secondary">%s</time>`+
+						`</a></li>`,
+					r.ID, r.ID, r.PublishedAt.Format("Jan 2, 2006 3:04 PM")))
+			}
+			sidebarHTML.WriteString(`</ul>`)
+			if pr.IssueURL != nil {
+				sidebarHTML.WriteString(fmt.Sprintf(
+					`<a href="%s" target="_blank" class="sidebar-issue-link">View GitHub Issue</a>`,
+					template.HTMLEscapeString(*pr.IssueURL)))
+			}
+		}
+		// Include archive button
+		sidebarHTML.WriteString(`<div class="sidebar-archive-action">`)
+		if pr.Archived {
+			sidebarHTML.WriteString(fmt.Sprintf(
+				`<button type="button" class="btn btn-sm btn-secondary btn-block" `+
+					`onclick="fetch('/github.com/%s/%s/prompt-requests/%d/unarchive', {method:'POST'}).then(function(){location.reload()});">Unarchive</button>`,
+				org, repoName, id))
+		} else {
+			archiveMsg := "Archive this prompt request?"
+			if pr.IssueURL != nil {
+				archiveMsg += " The linked GitHub issue will remain open."
+			}
+			sidebarHTML.WriteString(fmt.Sprintf(
+				`<button type="button" class="btn btn-sm btn-secondary btn-block" `+
+					`onclick="if(confirm('%s')){fetch('/github.com/%s/%s/prompt-requests/%d/archive', {method:'POST'}).then(function(){location.reload()});}">Archive</button>`,
+				archiveMsg, org, repoName, id))
+		}
+		sidebarHTML.WriteString(`</div>`)
+
+		ctx.HTML(".revision-sidebar", sidebarHTML.String())
+
+		// Append revision marker to conversation
+		if rev != nil {
+			markerHTML := fmt.Sprintf(
+				`<div class="submission-marker" id="revision-%d">`+
+					`<details class="submission-marker-details">`+
+					`<summary class="submission-marker-text">`+
+					`Published to GitHub — Revision %d `+
+					`<time>%s</time>`+
+					`</summary>`+
+					`<div class="revision-content">%s</div>`+
+					`</details></div>`,
+				rev.ID, rev.ID,
+				rev.PublishedAt.Format("Jan 2, 2006 3:04 PM"),
+				template.HTMLEscapeString(rev.Content))
+			ctx.HTML("#conversation", markerHTML, gotk.Append)
+		}
+
+		ctx.Exec("renderMarkdown")
+		ctx.Exec("scrollConversation")
 
 		return nil
 	})

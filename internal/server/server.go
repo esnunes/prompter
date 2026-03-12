@@ -40,6 +40,7 @@ type Server struct {
 	repoStatus  sync.Map // per-prompt-request status: prompt request ID (int64) → repoStatusEntry
 	cancelFuncs sync.Map // per-prompt-request cancel: prompt request ID (int64) → context.CancelFunc
 	repoMu      sync.Map // per-repo mutex: repo URL (string) → *sync.Mutex
+	gotkConns   sync.Map // active gotk WebSocket connections: conn ID (int64) → *gotk.Conn
 }
 
 var funcMap = template.FuncMap{
@@ -64,6 +65,13 @@ func New(queries *db.Queries) (*Server, error) {
 	}
 
 	s.registerGotkCommands()
+
+	s.gotkMux.HandleConnect(func(conn *gotk.Conn) {
+		s.gotkConns.Store(conn.ID(), conn)
+	})
+	s.gotkMux.HandleDisconnect(func(conn *gotk.Conn) {
+		s.gotkConns.Delete(conn.ID())
+	})
 
 	mux := http.NewServeMux()
 
@@ -231,6 +239,17 @@ func (s *Server) lockRepo(repoURL string) *sync.Mutex {
 	mu := v.(*sync.Mutex)
 	mu.Lock()
 	return mu
+}
+
+// pushAll sends gotk instructions to all connected WebSocket clients.
+func (s *Server) pushAll(ins []gotk.Instruction) {
+	s.gotkConns.Range(func(_, v any) bool {
+		conn := v.(*gotk.Conn)
+		if err := conn.Push(ins); err != nil {
+			log.Printf("gotk: push error (conn %d): %v", conn.ID(), err)
+		}
+		return true
+	})
 }
 
 func (s *Server) renderFragment(w http.ResponseWriter, name string, data any) {

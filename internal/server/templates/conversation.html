@@ -3,10 +3,10 @@
 {{define "header-actions"}}
 <div style="display:flex;gap:var(--space-3);align-items:center;">
   <a href="/github.com/{{.Org}}/{{.Repo}}/prompt-requests" class="pr-repo">{{.PromptRequest.RepoURL}}</a>
-  <span class="badge {{if eq .PromptRequest.Status "published"}}badge-published{{else}}badge-draft{{end}}">{{.PromptRequest.Status}}</span>
-  {{if .PromptRequest.IssueURL}}
+  <span id="status-badge" class="badge {{if eq .PromptRequest.Status "published"}}badge-published{{else}}badge-draft{{end}}">{{.PromptRequest.Status}}</span>
+  <span id="header-actions-extra">{{if .PromptRequest.IssueURL}}
   <a href="{{deref .PromptRequest.IssueURL}}" target="_blank" class="btn btn-sm btn-secondary">View Issue</a>
-  {{end}}
+  {{end}}</span>
   <form method="POST" action="/github.com/{{.Org}}/{{.Repo}}/prompt-requests" style="margin:0;">
     <button type="submit" class="btn btn-primary btn-sm">New prompt request</button>
   </form>
@@ -51,11 +51,8 @@
 
         {{if .LastQuestions}}
         <div class="question-block" id="question-form">
-          <form hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/messages"
-                hx-target="#conversation"
-                hx-swap="beforeend"
-                hx-disabled-elt="find button"
-                hx-on::after-request="this.closest('.question-block').remove(); document.getElementById('message-form').style.display = ''; scrollConversation();">
+          <div id="question-form-fields">
+            <input type="hidden" name="prompt_request_id" value="{{.PromptRequest.ID}}">
             {{range $q := .LastQuestions}}
             <div class="question-group">
               {{if $q.Header}}<span class="question-header">{{$q.Header}}</span>{{end}}
@@ -85,24 +82,23 @@
               <input type="text" name="q_{{$q.Index}}_other" class="other-input" placeholder="Type your answer..." maxlength="500">
             </div>
             {{end}}
-            <div class="mt-4" style="display:flex;gap:var(--space-3);">
-              <button type="submit" class="btn btn-primary">Answer</button>
-            </div>
-            <div class="htmx-indicator"><div class="spinner"></div> Thinking...</div>
-          </form>
+          </div>
+          <div class="mt-4" style="display:flex;gap:var(--space-3);">
+            <button gotk-click="answer-question"
+                    gotk-collect="#question-form-fields"
+                    gotk-loading="Sending..."
+                    class="btn btn-primary">Answer</button>
+          </div>
         </div>
         {{end}}
 
         {{if .PromptReady}}
-        <div class="prompt-ready">
+        <div class="prompt-ready" id="publish-form">
           <p>Prompt is ready to publish!</p>
-          <form hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/publish"
-                hx-target="body"
-                hx-swap="innerHTML"
-                hx-disabled-elt="find button">
-            <button type="submit" class="btn btn-primary">Publish to GitHub</button>
-            <div class="htmx-indicator"><div class="spinner"></div> Publishing...</div>
-          </form>
+          <button gotk-click="publish"
+                  gotk-val-prompt_request_id="{{.PromptRequest.ID}}"
+                  gotk-loading="Publishing..."
+                  class="btn btn-primary">Publish to GitHub</button>
         </div>
         {{end}}
 

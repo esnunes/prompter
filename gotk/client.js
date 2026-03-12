@@ -97,6 +97,15 @@
 
   // --- HTML sanitization (defense-in-depth) ---
 
+  // Configure DOMPurify to allow gotk-* attributes
+  if (typeof DOMPurify !== "undefined") {
+    DOMPurify.addHook("uponSanitizeAttribute", function(node, data) {
+      if (data.attrName.indexOf("gotk-") === 0) {
+        data.forceKeepAttr = true;
+      }
+    });
+  }
+
   function sanitizeHTML(html) {
     if (typeof DOMPurify !== "undefined") return DOMPurify.sanitize(html);
     return html;
