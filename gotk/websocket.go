@@ -26,7 +26,7 @@ type wsResponse struct {
 // and starts the command read/dispatch loop.
 func (m *Mux) ServeWebSocket(w http.ResponseWriter, r *http.Request) {
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
+		OriginPatterns: []string{"localhost:*", "127.0.0.1:*", "[::1]:*"},
 	})
 	if err != nil {
 		log.Printf("gotk: websocket accept: %v", err)

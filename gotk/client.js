@@ -39,6 +39,15 @@
     ws.onclose = function() {
       document.body.classList.remove("gotk-connected");
       document.body.classList.add("gotk-disconnected");
+      // Restore any buttons stuck in loading state
+      Object.keys(pendingLoading).forEach(function(ref) {
+        var info = pendingLoading[ref];
+        if (info.el) {
+          info.el.textContent = info.originalText;
+          info.el.disabled = false;
+        }
+      });
+      pendingLoading = {};
       scheduleReconnect();
     };
 
@@ -84,6 +93,13 @@
         applyInstruction(msg.ins[i]);
       }
     }
+  }
+
+  // --- HTML sanitization (defense-in-depth) ---
+
+  function sanitizeHTML(html) {
+    if (typeof DOMPurify !== "undefined") return DOMPurify.sanitize(html);
+    return html;
   }
 
   // --- Instruction application ---
@@ -149,12 +165,13 @@
       target.remove();
       return;
     }
+    var safeHTML = sanitizeHTML(ins.html);
     if (mode === "replace") {
-      target.innerHTML = ins.html;
+      target.innerHTML = safeHTML;
       scanElement(target);
     } else if (mode === "append") {
       var tmp = document.createElement("div");
-      tmp.innerHTML = ins.html;
+      tmp.innerHTML = safeHTML;
       while (tmp.firstChild) {
         var child = tmp.firstChild;
         target.appendChild(child);
@@ -162,7 +179,7 @@
       }
     } else if (mode === "prepend") {
       var tmp2 = document.createElement("div");
-      tmp2.innerHTML = ins.html;
+      tmp2.innerHTML = safeHTML;
       var first = target.firstChild;
       while (tmp2.firstChild) {
         var child2 = tmp2.firstChild;
@@ -202,7 +219,7 @@
     if (ins.target && ins.html) {
       var target = document.querySelector(ins.target);
       if (target) {
-        target.innerHTML = ins.html;
+        target.innerHTML = sanitizeHTML(ins.html);
         scanElement(target);
       }
     }

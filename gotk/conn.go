@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -44,5 +45,7 @@ func (c *Conn) writeJSON(v any) error {
 	if err != nil {
 		return err
 	}
-	return c.ws.Write(context.Background(), websocket.MessageText, data)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return c.ws.Write(ctx, websocket.MessageText, data)
 }
