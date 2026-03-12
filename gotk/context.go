@@ -1,9 +1,6 @@
 package gotk
 
-import (
-	"bytes"
-	"html/template"
-)
+import "strings"
 
 // AsyncCall represents a server command scheduled by ctx.Async.
 type AsyncCall struct {
@@ -17,7 +14,7 @@ type Context struct {
 
 	instructions []Instruction
 	asyncCalls   []AsyncCall
-	templates    *template.Template
+	templates    any // *template.Template on server, nil under TinyGo/WASM
 }
 
 // HTML produces an html instruction.
@@ -146,23 +143,16 @@ func (c *Context) Error(target, message string) {
 	c.instructions = append(c.instructions, Instruction{
 		Op:     "html",
 		Target: target,
-		HTML:   `<div class="gotk-error">` + template.HTMLEscapeString(message) + `</div>`,
+		HTML:   `<div class="gotk-error">` + htmlEscape(message) + `</div>`,
 	})
 }
 
-// Render renders a Go template by name and returns the HTML string.
-func (c *Context) Render(name string, data any) string {
-	if c.templates == nil {
-		return ""
-	}
-	var buf bytes.Buffer
-	if err := c.templates.ExecuteTemplate(&buf, name, data); err != nil {
-		return ""
-	}
-	return buf.String()
-}
-
-// setTemplates configures the template engine for ctx.Render.
-func (c *Context) setTemplates(t *template.Template) {
-	c.templates = t
+// htmlEscape escapes HTML special characters without importing html/template.
+func htmlEscape(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, `"`, "&quot;")
+	s = strings.ReplaceAll(s, "'", "&#39;")
+	return s
 }
