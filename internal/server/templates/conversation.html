@@ -7,9 +7,10 @@
   <span id="header-actions-extra">{{if .PromptRequest.IssueURL}}
   <a href="{{deref .PromptRequest.IssueURL}}" target="_blank" class="btn btn-sm btn-secondary">View Issue</a>
   {{end}}</span>
-  <form method="POST" action="/github.com/{{.Org}}/{{.Repo}}/prompt-requests" style="margin:0;">
-    <button type="submit" class="btn btn-primary btn-sm">New prompt request</button>
-  </form>
+  <button gotk-click="create-prompt-request"
+          gotk-val-org="{{.Org}}" gotk-val-repo="{{.Repo}}"
+          gotk-loading="Creating..."
+          class="btn btn-primary btn-sm">New prompt request</button>
 </div>
 {{end}}
 

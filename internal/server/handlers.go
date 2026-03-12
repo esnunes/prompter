@@ -127,47 +127,6 @@ func (s *Server) handleRepoPage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
-	org := r.PathValue("org")
-	repoName := r.PathValue("repo")
-	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
-
-	// Compute local path and upsert repo
-	localPath, err := repo.LocalPath(repoURL)
-	if err != nil {
-		log.Printf("computing local path: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	repoRecord, err := s.queries.UpsertRepository(repoURL, localPath)
-	if err != nil {
-		log.Printf("upserting repository: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	sessionID := uuid.New().String()
-	pr, err := s.queries.CreatePromptRequest(repoRecord.ID, sessionID)
-	if err != nil {
-		log.Printf("creating prompt request: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	// Determine initial status based on whether the repo is already cloned
-	cloned, _ := repo.IsCloned(repoURL)
-	if cloned {
-		s.setRepoStatus(pr.ID, "pulling", "")
-	} else {
-		s.setRepoStatus(pr.ID, "cloning", "")
-	}
-
-	// Launch async clone/pull
-	go s.asyncEnsureCloned(pr.ID, repoURL)
-
-	http.Redirect(w, r, fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d", org, repoName, pr.ID), http.StatusSeeOther)
-}
 
 type conversationData struct {
 	basePageData
@@ -1009,6 +968,45 @@ func (s *Server) buildPromptReadyPush(prID int64, org, repoName string) []gotk.I
 
 // registerGotkCommands registers gotk command handlers on the mux.
 func (s *Server) registerGotkCommands() {
+	s.gotkMux.Handle("create-prompt-request", func(ctx *gotk.Context) error {
+		org := ctx.Payload.String("org")
+		repoName := ctx.Payload.String("repo")
+		repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
+
+		localPath, err := repo.LocalPath(repoURL)
+		if err != nil {
+			log.Printf("computing local path: %v", err)
+			return nil
+		}
+
+		repoRecord, err := s.queries.UpsertRepository(repoURL, localPath)
+		if err != nil {
+			log.Printf("upserting repository: %v", err)
+			return nil
+		}
+
+		sessionID := uuid.New().String()
+		pr, err := s.queries.CreatePromptRequest(repoRecord.ID, sessionID)
+		if err != nil {
+			log.Printf("creating prompt request: %v", err)
+			return nil
+		}
+
+		cloned, _ := repo.IsCloned(repoURL)
+		if cloned {
+			s.setRepoStatus(pr.ID, "pulling", "")
+		} else {
+			s.setRepoStatus(pr.ID, "cloning", "")
+		}
+
+		go s.asyncEnsureCloned(pr.ID, repoURL)
+
+		url := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d", org, repoName, pr.ID)
+		ctx.Exec("navigateTo", map[string]any{"url": url})
+
+		return nil
+	})
+
 	s.gotkMux.Handle("send-message", func(ctx *gotk.Context) error {
 		idStr := ctx.Payload.String("prompt_request_id")
 		id, err := strconv.ParseInt(idStr, 10, 64)

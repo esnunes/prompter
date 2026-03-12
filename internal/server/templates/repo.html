@@ -3,9 +3,10 @@
 {{define "header-actions"}}
 <a href="/" class="btn btn-secondary btn-sm">&larr; Dashboard</a>
 {{if not .Error}}
-<form method="POST" action="/github.com/{{.Org}}/{{.Repo}}/prompt-requests">
-  <button type="submit" class="btn btn-primary btn-sm">New prompt request</button>
-</form>
+<button gotk-click="create-prompt-request"
+        gotk-val-org="{{.Org}}" gotk-val-repo="{{.Repo}}"
+        gotk-loading="Creating..."
+        class="btn btn-primary btn-sm">New prompt request</button>
 {{end}}
 {{end}}
 

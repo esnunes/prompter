@@ -119,5 +119,9 @@ document.addEventListener("DOMContentLoaded", function () {
     gotk.register("updateElapsedTimers", function () {
       if (typeof updateElapsedTimers === "function") updateElapsedTimers();
     });
+
+    gotk.register("navigateTo", function (args) {
+      if (args && args.url) window.location.href = args.url;
+    });
   }
 });
