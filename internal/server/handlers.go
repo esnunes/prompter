@@ -876,7 +876,7 @@ func (s *Server) buildStatusPush(prID int64, status string, entry repoStatusEntr
 
 	// Replace existing #repo-status or append to #conversation
 	ins = append([]gotk.Instruction{
-		{Op: "remove", Target: "#repo-status"},
+		{Op: "html", Target: "#repo-status", Mode: gotk.Remove},
 		{Op: "html", Target: "#conversation", HTML: statusHTML, Mode: gotk.Append},
 	}, ins...)
 
