@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/esnunes/prompter/gotk"
 	"github.com/esnunes/prompter/internal/claude"
 	"github.com/esnunes/prompter/internal/github"
 	"github.com/esnunes/prompter/internal/models"
@@ -1160,4 +1162,79 @@ func parseRawResponse(rawJSON string) *claude.Response {
 		return &resp
 	}
 	return nil
+}
+
+// registerGotkCommands registers gotk command handlers on the mux.
+func (s *Server) registerGotkCommands() {
+	s.gotkMux.Handle("send-message", func(ctx *gotk.Context) error {
+		idStr := ctx.Payload.String("prompt_request_id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			ctx.Error("#conversation", "Invalid prompt request ID")
+			return nil
+		}
+
+		org := ctx.Payload.String("org")
+		repoName := ctx.Payload.String("repo")
+		message := strings.TrimSpace(ctx.Payload.String("message"))
+		if message == "" {
+			return nil
+		}
+
+		// Save user message
+		userMsg, err := s.queries.CreateMessage(id, "user", message, nil)
+		if err != nil {
+			ctx.Error("#conversation", "Failed to save message")
+			return nil
+		}
+
+		// Render user message bubble and append to conversation
+		userHTML := `<div class="message message-user"><div class="message-bubble">` +
+			template.HTMLEscapeString(userMsg.Content) + `</div></div>`
+		ctx.HTML("#conversation", userHTML, gotk.Append)
+
+		// Clear the textarea
+		ctx.SetValue("#message-input", "")
+
+		// Check repo status — if not ready, just save and disable form
+		statusEntry := s.getRepoStatus(id)
+		if statusEntry.Status != "" && statusEntry.Status != "ready" {
+			ctx.AttrSet("#message-input", "disabled", "true")
+			ctx.AttrSet("#send-btn", "disabled", "true")
+			return nil
+		}
+
+		// Repo is ready — launch async Claude call
+		bgCtx, cancel := context.WithCancel(context.Background())
+		s.setRepoStatusProcessing(id, cancel)
+		go s.backgroundSendMessage(bgCtx, id)
+
+		// Show processing indicator (HTMX-based polling for response)
+		pollURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/status", org, repoName, id)
+		cancelURL := fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d/cancel", org, repoName, id)
+		entry := s.getRepoStatus(id)
+		processingHTML := fmt.Sprintf(
+			`<div id="repo-status" class="repo-status" hx-get="%s" hx-trigger="every 2s" hx-swap="morph:outerHTML" data-started-at="%d">`+
+				`<div class="processing-indicator"><div class="spinner"></div>`+
+				`<span class="processing-text">Thinking...</span>`+
+				`<span class="elapsed-timer"></span></div>`+
+				`<form hx-post="%s" hx-target="#repo-status" hx-swap="outerHTML" hx-disabled-elt="find button" style="display:inline;">`+
+				`<button type="submit" class="btn btn-sm btn-secondary">Cancel</button></form></div>`,
+			pollURL, entry.StartedAt.Unix(), cancelURL)
+
+		// Remove any stale #repo-status, then append new one
+		ctx.Remove("#repo-status")
+		ctx.HTML("#conversation", processingHTML, gotk.Append)
+
+		// Re-process HTMX on new content and scroll
+		ctx.Exec("htmxProcess", map[string]any{"selector": "#repo-status"})
+		ctx.Exec("scrollConversation")
+		ctx.Exec("updateElapsedTimers")
+
+		// Disable input while processing
+		ctx.AttrSet("#message-input", "disabled", "true")
+		ctx.AttrSet("#send-btn", "disabled", "true")
+
+		return nil
+	})
 }

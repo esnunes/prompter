@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/esnunes/prompter/gotk"
 	"github.com/esnunes/prompter/internal/db"
 )
 
@@ -31,6 +32,7 @@ type repoStatusEntry struct {
 type Server struct {
 	queries    *db.Queries
 	pages      map[string]*template.Template
+	gotkMux    *gotk.Mux
 	httpSrv    *http.Server
 	ln         net.Listener
 	addr       string
@@ -58,7 +60,10 @@ func New(queries *db.Queries) (*Server, error) {
 	s := &Server{
 		queries: queries,
 		pages:   pages,
+		gotkMux: gotk.NewMux(),
 	}
+
+	s.registerGotkCommands()
 
 	mux := http.NewServeMux()
 
@@ -67,6 +72,10 @@ func New(queries *db.Queries) (*Server, error) {
 		return nil, fmt.Errorf("getting static subfs: %w", err)
 	}
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
+
+	// gotk: WebSocket endpoint and thin client JS
+	mux.HandleFunc("GET /ws", s.gotkMux.ServeWebSocket)
+	mux.HandleFunc("GET /gotk/client.js", gotk.ClientJSHandler())
 
 	mux.HandleFunc("GET /{$}", s.handleDashboard)
 	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests", s.handleRepoPage)

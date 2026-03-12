@@ -148,16 +148,17 @@
       </div>
 
       <div class="chat-input" id="message-form"{{if .LastQuestions}} style="display:none"{{end}}>
-        <form class="chat-form"
-              hx-post="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/messages"
-              hx-target="#conversation"
-              hx-swap="beforeend"
-              hx-disabled-elt="find button, find textarea"
-              hx-on::after-request="this.reset(); scrollConversation();">
-          <textarea name="message" placeholder="Describe the feature you'd like... (Enter to send, Shift+Enter for new line)" rows="2" required></textarea>
-          <button type="submit" class="btn btn-primary">Send</button>
-          <div class="htmx-indicator"><div class="spinner"></div></div>
-        </form>
+        <div class="chat-form" id="message-form-fields">
+          <input type="hidden" name="prompt_request_id" value="{{.PromptRequest.ID}}">
+          <input type="hidden" name="org" value="{{.Org}}">
+          <input type="hidden" name="repo" value="{{.Repo}}">
+          <textarea id="message-input" name="message" placeholder="Describe the feature you'd like... (Enter to send, Shift+Enter for new line)" rows="2"></textarea>
+          <button id="send-btn"
+                  gotk-click="send-message"
+                  gotk-collect="#message-form-fields"
+                  gotk-loading="Sending..."
+                  class="btn btn-primary">Send</button>
+        </div>
       </div>
     </div>
   </div>

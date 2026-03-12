@@ -140,7 +140,8 @@ setInterval(updateElapsedTimers, 1000);
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Enter") return;
     var textarea = e.target;
-    if (!textarea.matches(".chat-form textarea")) return;
+    // Support both old HTMX form and new gotk form
+    if (textarea.id !== "message-input" && !textarea.matches(".chat-form textarea")) return;
 
     // Allow Shift+Enter to insert newline (default behavior)
     if (e.shiftKey) return;
@@ -156,7 +157,12 @@ setInterval(updateElapsedTimers, 1000);
     // Don't submit if textarea is disabled (processing in progress)
     if (textarea.disabled) return;
 
-    // Submit via the form's submit button to keep HTMX pipeline intact
+    // Try gotk send button first, fall back to form submit button
+    var sendBtn = document.getElementById("send-btn");
+    if (sendBtn && !sendBtn.disabled) {
+      sendBtn.click();
+      return;
+    }
     var form = textarea.closest("form");
     if (form) {
       var btn = form.querySelector('button[type="submit"]');
@@ -164,3 +170,36 @@ setInterval(updateElapsedTimers, 1000);
     }
   });
 })();
+
+// Register gotk exec functions for use by server commands
+document.addEventListener("DOMContentLoaded", function () {
+  if (window.gotk) {
+    gotk.register("scrollConversation", function () {
+      if (typeof scrollConversation === "function") scrollConversation();
+    });
+
+    gotk.register("htmxProcess", function (args) {
+      if (typeof htmx !== "undefined" && args && args.selector) {
+        var el = document.querySelector(args.selector);
+        if (el) htmx.process(el);
+      }
+    });
+
+    gotk.register("renderMarkdown", function () {
+      // renderMarkdown is defined inside an IIFE, expose it via a closure
+      var bubbles = document.querySelectorAll(
+        ".message-assistant .message-bubble:not([data-md-rendered]), .revision-content:not([data-md-rendered])"
+      );
+      bubbles.forEach(function (el) {
+        if (typeof DOMPurify !== "undefined" && typeof marked !== "undefined") {
+          el.innerHTML = DOMPurify.sanitize(marked.parse(el.textContent));
+          el.setAttribute("data-md-rendered", "");
+        }
+      });
+    });
+
+    gotk.register("updateElapsedTimers", function () {
+      if (typeof updateElapsedTimers === "function") updateElapsedTimers();
+    });
+  }
+});
