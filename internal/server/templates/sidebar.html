@@ -1,27 +1,25 @@
-<aside class="prompt-sidebar" id="prompt-sidebar">
-  <h3 class="sidebar-heading">Prompts</h3>
-  {{if .Items}}
-  <ul class="prompt-list">
-    {{range .Items}}
-    <li id="prompt-{{.ID}}" class="prompt-list-item{{if eq .ID $.CurrentID}} prompt-list-item-active{{end}}{{if .Unread}} prompt-list-item-unread{{end}}">
-      <a href="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.ID}}" class="prompt-list-link">
-        <div class="prompt-list-title">
-          {{if .Title}}{{.Title}}{{else}}Untitled{{end}}
-        </div>
-        <div class="prompt-list-meta">
-          <span class="badge {{if .Processing}}badge-processing{{else if eq .Status "published"}}badge-published{{else}}badge-draft{{end}}">
-            {{if .Processing}}processing{{else}}{{.Status}}{{end}}
-          </span>
-          <time class="text-sm text-secondary">{{.UpdatedAt.Format "Jan 2, 2006"}}</time>
-        </div>
-        {{if eq $.Scope "all"}}
-        <div class="prompt-list-repo text-sm text-secondary">{{.RepoURL}}</div>
-        {{end}}
-      </a>
-    </li>
-    {{end}}
-  </ul>
-  {{else}}
-  <p class="text-secondary text-sm">No prompt requests yet</p>
+<h3 class="sidebar-heading">Prompts</h3>
+{{if .Items}}
+<ul class="prompt-list">
+  {{range .Items}}
+  <li id="prompt-{{.ID}}" class="prompt-list-item{{if eq .ID $.CurrentID}} prompt-list-item-active{{end}}{{if .Unread}} prompt-list-item-unread{{end}}">
+    <a href="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.ID}}" class="prompt-list-link">
+      <div class="prompt-list-title">
+        {{if .Title}}{{.Title}}{{else}}Untitled{{end}}
+      </div>
+      <div class="prompt-list-meta">
+        <span class="badge {{if .Processing}}badge-processing{{else if eq .Status "published"}}badge-published{{else}}badge-draft{{end}}">
+          {{if .Processing}}processing{{else}}{{.Status}}{{end}}
+        </span>
+        <time class="text-sm text-secondary">{{.UpdatedAt.Format "Jan 2, 2006"}}</time>
+      </div>
+      {{if eq $.Scope "all"}}
+      <div class="prompt-list-repo text-sm text-secondary">{{.RepoURL}}</div>
+      {{end}}
+    </a>
+  </li>
   {{end}}
-</aside>
+</ul>
+{{else}}
+<p class="text-secondary text-sm">No prompt requests yet</p>
+{{end}}

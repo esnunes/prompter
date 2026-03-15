@@ -3,3 +3,5 @@
 [tools]
 go = { version = "1.25.5" }
 "go:golang.org/x/tools/gopls" = { version = "v0.20.0" }
+"github:tinygo-org/tinygo" = { version = "0.40.1" }
+"github:WebAssembly/binaryen" = { version = "version_127" }

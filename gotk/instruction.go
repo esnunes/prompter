@@ -21,11 +21,9 @@ type Instruction struct {
 	Event   string         `json:"event,omitempty"`
 	Detail  map[string]any `json:"detail,omitempty"`
 	URL     string         `json:"url,omitempty"`
-	Name    string         `json:"name,omitempty"`
-	Args    map[string]any `json:"args,omitempty"`
-	Cmd     string         `json:"cmd,omitempty"`
-	Payload map[string]any `json:"payload,omitempty"`
-	Data    map[string]any `json:"data,omitempty"`
+	Name string         `json:"name,omitempty"`
+	Args map[string]any `json:"args,omitempty"`
+	Data map[string]any `json:"data,omitempty"`
 }
 
 // HandlerFunc is the signature for all command handlers.

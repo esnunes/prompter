@@ -1,5 +1,3 @@
-//go:build !tinygo
-
 package gotk
 
 import "html/template"
@@ -32,9 +30,4 @@ func (tc *TestContext) SetTemplates(t *template.Template) {
 // Instructions returns all instructions produced by handlers.
 func (tc *TestContext) Instructions() []Instruction {
 	return tc.Context.instructions
-}
-
-// AsyncCalls returns all async calls scheduled by handlers.
-func (tc *TestContext) AsyncCalls() []AsyncCall {
-	return tc.Context.asyncCalls
 }

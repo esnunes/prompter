@@ -1,3 +1,39 @@
+<!-- components -->
+
+{{- define "message" -}}
+<div class="message message-{{.Role}}"><div class="message-bubble">{{.Content}}</div></div>
+{{- end}}
+
+{{- define "status-cloning" -}}
+<div id="repo-status" class="repo-status"><div class="spinner"></div> Cloning repository...</div>
+{{- end}}
+
+{{- define "status-pulling" -}}
+<div id="repo-status" class="repo-status"><div class="spinner"></div> Pulling latest changes...</div>
+{{- end}}
+
+{{- define "status-ready" -}}
+<div id="repo-status" class="repo-status repo-status-ready">Repository ready!</div>
+{{- end}}
+
+{{- define "status-cancelled" -}}
+<div id="repo-status" class="repo-status repo-status-cancelled"><span>Request cancelled.</span><button gotk-click="resend" gotk-val-prompt_request_id="{{.PromptRequestID}}" gotk-loading="Resending..." class="btn btn-sm btn-primary">Retry</button></div>
+{{- end}}
+
+{{- define "status-error" -}}
+<div id="repo-status" class="repo-status repo-status-error"><span>Error: {{.Error}}</span><button gotk-click="retry" gotk-val-prompt_request_id="{{.PromptRequestID}}" gotk-loading="Retrying..." class="btn btn-sm btn-secondary">Retry</button></div>
+{{- end}}
+
+{{- define "processing-indicator" -}}
+<div id="repo-status" class="repo-status" data-started-at="{{.StartedAt}}"><div class="processing-indicator"><div class="spinner"></div><span class="processing-text">Thinking...</span><span class="elapsed-timer"></span></div><button gotk-click="cancel-message" gotk-val-prompt_request_id="{{.PromptRequestID}}" class="btn btn-sm btn-secondary">Cancel</button></div>
+{{- end}}
+
+{{- define "prompt-ready" -}}
+<div class="prompt-ready" id="publish-form"><p>Prompt is ready to publish!</p><button gotk-click="publish" gotk-val-prompt_request_id="{{.PromptRequestID}}" gotk-loading="Publishing..." class="btn btn-primary">Publish to GitHub</button></div>
+{{- end}}
+
+<!-- page -->
+
 {{define "title"}}{{if .PromptRequest.Title}}{{.PromptRequest.Title}}{{else}}Conversation{{end}} — Prompter{{end}}
 
 {{define "header-actions"}}
@@ -32,9 +68,7 @@
       <div class="chat-messages" id="conversation">
         {{range .Timeline}}
           {{if eq .Type "message"}}
-          <div class="message message-{{.Message.Role}}">
-            <div class="message-bubble">{{.Message.Content}}</div>
-          </div>
+            {{template "message" .Message}}
           {{else if eq .Type "revision-marker"}}
           <div class="submission-marker" id="revision-{{.Revision.ID}}">
             <details class="submission-marker-details">
@@ -92,40 +126,17 @@
         {{end}}
 
         {{if .PromptReady}}
-        <div class="prompt-ready" id="publish-form">
-          <p>Prompt is ready to publish!</p>
-          <button gotk-click="publish"
-                  gotk-val-prompt_request_id="{{.PromptRequest.ID}}"
-                  gotk-loading="Publishing..."
-                  class="btn btn-primary">Publish to GitHub</button>
-        </div>
+        {{template "prompt-ready" (dict "PromptRequestID" .PromptRequest.ID)}}
         {{end}}
 
         {{if eq .RepoStatus "processing"}}
-        <div id="repo-status" class="repo-status"
-             data-started-at="{{.RepoStartedAt}}">
-          <div class="processing-indicator">
-            <div class="spinner"></div>
-            <span class="processing-text">Thinking...</span>
-            <span class="elapsed-timer"></span>
-          </div>
-          <button gotk-click="cancel-message"
-                  gotk-val-prompt_request_id="{{.PromptRequest.ID}}"
-                  class="btn btn-sm btn-secondary">Cancel</button>
-        </div>
+        {{template "processing-indicator" (dict "StartedAt" .RepoStartedAt "PromptRequestID" .PromptRequest.ID)}}
         {{else if eq .RepoStatus "cancelled"}}
-        <div id="repo-status" class="repo-status repo-status-cancelled">
-          <span>Request cancelled.</span>
-          <button gotk-click="resend"
-                  gotk-val-prompt_request_id="{{.PromptRequest.ID}}"
-                  gotk-loading="Resending..."
-                  class="btn btn-sm btn-primary">Retry</button>
-        </div>
-        {{else if or (eq .RepoStatus "cloning") (eq .RepoStatus "pulling")}}
-        <div id="repo-status" class="repo-status">
-          <div class="spinner"></div>
-          {{if eq .RepoStatus "cloning"}}Cloning repository...{{else if eq .RepoStatus "pulling"}}Pulling latest changes...{{else}}Preparing repository...{{end}}
-        </div>
+        {{template "status-cancelled" (dict "PromptRequestID" .PromptRequest.ID)}}
+        {{else if eq .RepoStatus "cloning"}}
+        {{template "status-cloning"}}
+        {{else if eq .RepoStatus "pulling"}}
+        {{template "status-pulling"}}
         {{end}}
       </div>
 

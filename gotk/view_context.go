@@ -3,20 +3,34 @@ package gotk
 import (
 	"bytes"
 	"html/template"
-	"strings"
 )
 
-// Context is passed to every command handler.
-type Context struct {
-	Payload Payload
-
+// ViewContext is available to view event handlers. It provides the full
+// instruction builder and template rendering. This is the only context
+// that can produce DOM instructions.
+type ViewContext struct {
 	instructions []Instruction
 	templates    *template.Template
-	conn         *Conn
+}
+
+// NewViewContext creates a new ViewContext with the given templates.
+func NewViewContext(templates *template.Template) *ViewContext {
+	return &ViewContext{templates: templates}
+}
+
+// Instructions returns all instructions accumulated since the last Reset.
+func (c *ViewContext) Instructions() []Instruction {
+	return c.instructions
+}
+
+// Reset clears accumulated instructions. Called by the framework after
+// flushing instructions to the client.
+func (c *ViewContext) Reset() {
+	c.instructions = c.instructions[:0]
 }
 
 // HTML produces an html instruction.
-func (c *Context) HTML(target, html string, mode ...string) {
+func (c *ViewContext) HTML(target, html string, mode ...string) {
 	m := Replace
 	if len(mode) > 0 && mode[0] != "" {
 		m = mode[0]
@@ -30,7 +44,7 @@ func (c *Context) HTML(target, html string, mode ...string) {
 }
 
 // Remove produces an html instruction with mode "remove".
-func (c *Context) Remove(target string) {
+func (c *ViewContext) Remove(target string) {
 	c.instructions = append(c.instructions, Instruction{
 		Op:     "html",
 		Target: target,
@@ -39,7 +53,7 @@ func (c *Context) Remove(target string) {
 }
 
 // Template produces a template instruction.
-func (c *Context) Template(source, target string) {
+func (c *ViewContext) Template(source, target string) {
 	c.instructions = append(c.instructions, Instruction{
 		Op:     "template",
 		Source:  source,
@@ -48,7 +62,7 @@ func (c *Context) Template(source, target string) {
 }
 
 // Populate produces a populate instruction.
-func (c *Context) Populate(target string, data map[string]any) {
+func (c *ViewContext) Populate(target string, data map[string]any) {
 	c.instructions = append(c.instructions, Instruction{
 		Op:     "populate",
 		Target: target,
@@ -57,7 +71,7 @@ func (c *Context) Populate(target string, data map[string]any) {
 }
 
 // Navigate produces a navigate instruction.
-func (c *Context) Navigate(url string, targetAndHTML ...string) {
+func (c *ViewContext) Navigate(url string, targetAndHTML ...string) {
 	ins := Instruction{Op: "navigate", URL: url}
 	if len(targetAndHTML) >= 1 {
 		ins.Target = targetAndHTML[0]
@@ -69,7 +83,7 @@ func (c *Context) Navigate(url string, targetAndHTML ...string) {
 }
 
 // AttrSet produces an attr-set instruction.
-func (c *Context) AttrSet(target, attr string, value ...string) {
+func (c *ViewContext) AttrSet(target, attr string, value ...string) {
 	v := ""
 	if len(value) > 0 {
 		v = value[0]
@@ -83,7 +97,7 @@ func (c *Context) AttrSet(target, attr string, value ...string) {
 }
 
 // AttrRemove produces an attr-remove instruction.
-func (c *Context) AttrRemove(target, attr string) {
+func (c *ViewContext) AttrRemove(target, attr string) {
 	c.instructions = append(c.instructions, Instruction{
 		Op:     "attr-remove",
 		Target: target,
@@ -92,7 +106,7 @@ func (c *Context) AttrRemove(target, attr string) {
 }
 
 // SetValue produces a set-value instruction.
-func (c *Context) SetValue(target, value string) {
+func (c *ViewContext) SetValue(target, value string) {
 	c.instructions = append(c.instructions, Instruction{
 		Op:     "set-value",
 		Target: target,
@@ -100,8 +114,8 @@ func (c *Context) SetValue(target, value string) {
 	})
 }
 
-// Dispatch produces a dispatch instruction.
-func (c *Context) Dispatch(target, event string, detail ...map[string]any) {
+// Dispatch produces a dispatch instruction (dispatches a DOM CustomEvent).
+func (c *ViewContext) Dispatch(target, event string, detail ...map[string]any) {
 	ins := Instruction{Op: "dispatch", Target: target, Event: event}
 	if len(detail) > 0 {
 		ins.Detail = detail[0]
@@ -110,7 +124,7 @@ func (c *Context) Dispatch(target, event string, detail ...map[string]any) {
 }
 
 // Focus produces a focus instruction.
-func (c *Context) Focus(target string) {
+func (c *ViewContext) Focus(target string) {
 	c.instructions = append(c.instructions, Instruction{
 		Op:     "focus",
 		Target: target,
@@ -118,7 +132,7 @@ func (c *Context) Focus(target string) {
 }
 
 // Exec produces an exec instruction.
-func (c *Context) Exec(name string, args ...map[string]any) {
+func (c *ViewContext) Exec(name string, args ...map[string]any) {
 	ins := Instruction{Op: "exec", Name: name}
 	if len(args) > 0 {
 		ins.Args = args[0]
@@ -127,7 +141,7 @@ func (c *Context) Exec(name string, args ...map[string]any) {
 }
 
 // Error produces an html instruction with a gotk-error div.
-func (c *Context) Error(target, message string) {
+func (c *ViewContext) Error(target, message string) {
 	c.instructions = append(c.instructions, Instruction{
 		Op:     "html",
 		Target: target,
@@ -136,7 +150,7 @@ func (c *Context) Error(target, message string) {
 }
 
 // Render renders a Go template by name and returns the HTML string.
-func (c *Context) Render(name string, data any) string {
+func (c *ViewContext) Render(name string, data any) string {
 	if c.templates == nil {
 		return ""
 	}
@@ -145,30 +159,4 @@ func (c *Context) Render(name string, data any) string {
 		return ""
 	}
 	return buf.String()
-}
-
-// setTemplates configures the template engine for ctx.Render.
-func (c *Context) setTemplates(t *template.Template) {
-	c.templates = t
-}
-
-// Conn returns the originating WebSocket connection for this context.
-// Returns nil for contexts not associated with a connection (e.g., tests).
-func (c *Context) Conn() *Conn {
-	return c.conn
-}
-
-// setConn associates a WebSocket connection with this context.
-func (c *Context) setConn(conn *Conn) {
-	c.conn = conn
-}
-
-// htmlEscape escapes HTML special characters.
-func htmlEscape(s string) string {
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	s = strings.ReplaceAll(s, ">", "&gt;")
-	s = strings.ReplaceAll(s, `"`, "&quot;")
-	s = strings.ReplaceAll(s, "'", "&#39;")
-	return s
 }

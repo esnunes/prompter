@@ -22,7 +22,7 @@
   <h2>{{.RepoURL}}</h2>
   <label class="archive-toggle">
     <input type="checkbox" {{if .ShowArchived}}checked{{end}}
-           onchange="window.location.href = this.checked ? '?archived=1' : window.location.pathname">
+           onchange="gotk.navigate(this.checked ? '?archived=1' : window.location.pathname)">
     Show archived
   </label>
 </div>

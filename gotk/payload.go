@@ -54,6 +54,27 @@ func (p Payload) Int(key string) int {
 	}
 }
 
+// Int64 returns the int64 value for key, or 0. Coerces strings and floats.
+func (p Payload) Int64(key string) int64 {
+	v, ok := p.data[key]
+	if !ok {
+		return 0
+	}
+	switch val := v.(type) {
+	case int64:
+		return val
+	case int:
+		return int64(val)
+	case float64:
+		return int64(val)
+	case string:
+		n, _ := strconv.ParseInt(val, 10, 64)
+		return n
+	default:
+		return 0
+	}
+}
+
 // Float returns the float64 value for key, or 0.
 func (p Payload) Float(key string) float64 {
 	v, ok := p.data[key]

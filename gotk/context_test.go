@@ -108,21 +108,6 @@ func TestContext_Exec(t *testing.T) {
 	}
 }
 
-func TestContext_Async(t *testing.T) {
-	tc := NewTestContext()
-	tc.Async("load-user", map[string]any{"id": 42})
-
-	ins := tc.Instructions()
-	if ins[0].Op != "cmd" || ins[0].Cmd != "load-user" {
-		t.Errorf("ins[0] = %+v", ins[0])
-	}
-
-	calls := tc.AsyncCalls()
-	if len(calls) != 1 || calls[0].Cmd != "load-user" {
-		t.Errorf("async = %+v", calls)
-	}
-}
-
 func TestContext_Error(t *testing.T) {
 	tc := NewTestContext()
 	tc.Error("#body", "Something failed")

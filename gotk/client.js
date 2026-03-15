@@ -1,5 +1,5 @@
-// gotk thin client — connects WebSocket, loads WASM, scans gotk-* attributes,
-// routes commands (WASM local or WebSocket), applies instructions.
+// gotk thin client — connects WebSocket, scans gotk-* attributes,
+// routes commands via WebSocket, applies instructions.
 (function() {
   "use strict";
 
@@ -11,15 +11,16 @@
   var reconnectDelays = [0, 2000, 5000, 10000, 30000];
   var boundElements = new WeakSet();
 
-  // WASM state
-  var wasmReady = false;
-  var localCmds = null; // Set of command names registered in WASM
-  var wasmExec = null;  // function(cmd, payloadJSON) => resultJSON
-
   // Public API
   window.gotk = {
     register: function(name, fn) {
       registeredFns[name] = fn;
+    },
+    scan: function(el) {
+      scanElement(el);
+    },
+    navigate: function(url, opts) {
+      doNavigate(url, opts);
     }
   };
 
@@ -28,78 +29,9 @@
     return String(refCounter);
   }
 
-  // --- WASM loading ---
-
-  function initWASM() {
-    if (typeof WebAssembly === "undefined") return;
-
-    // TinyGo WASM requires wasm_exec.js to be loaded first (provides Go class)
-    if (typeof Go === "undefined") return;
-
-    var go = new Go();
-    fetch("/gotk/app.wasm")
-      .then(function(resp) {
-        if (!resp.ok) return null;
-        return WebAssembly.instantiateStreaming(resp, go.importObject);
-      })
-      .then(function(result) {
-        if (!result) return;
-        go.run(result.instance);
-
-        // TinyGo WASM exposes functions via js.Global().Set() from Go side.
-        // The WASM entry point registers listCommands/execCommand on window.
-        if (typeof window.__gotk_listCommands === "function" &&
-            typeof window.__gotk_execCommand === "function") {
-          var cmdsJSON = window.__gotk_listCommands();
-          var cmds = JSON.parse(cmdsJSON);
-          localCmds = new Set(cmds);
-          wasmExec = window.__gotk_execCommand;
-          wasmReady = true;
-        }
-      })
-      .catch(function(err) {
-        console.warn("gotk: WASM load failed, all commands will route to server:", err);
-      });
-  }
-
   // --- Command dispatch ---
 
   function dispatchCommand(cmd, payload, ref) {
-    // Try WASM first
-    if (wasmReady && localCmds && localCmds.has(cmd)) {
-      var payloadJSON = JSON.stringify(payload || {});
-      var resultJSON = wasmExec(cmd, payloadJSON);
-      var result;
-      try { result = JSON.parse(resultJSON); } catch(_) { return; }
-
-      // Apply immediate instructions (skip "cmd" ops — handled via async below)
-      if (result.ins) {
-        for (var i = 0; i < result.ins.length; i++) {
-          if (result.ins[i].op !== "cmd") {
-            applyInstruction(result.ins[i]);
-          }
-        }
-      }
-
-      // Dispatch async server commands
-      if (result.async) {
-        for (var j = 0; j < result.async.length; j++) {
-          var ac = result.async[j];
-          send(ac.Cmd || ac.cmd, ac.Payload || ac.payload || {}, nextRef());
-        }
-      }
-
-      // Restore loading state immediately for WASM commands (synchronous)
-      if (ref && pendingLoading[ref]) {
-        var info = pendingLoading[ref];
-        info.el.textContent = info.originalText;
-        info.el.disabled = false;
-        delete pendingLoading[ref];
-      }
-      return;
-    }
-
-    // Fall back to WebSocket
     send(cmd, payload, ref);
   }
 
@@ -107,7 +39,8 @@
 
   function connect() {
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
-    var url = proto + "//" + location.host + "/ws";
+    var pageURL = encodeURIComponent(location.pathname + location.search);
+    var url = proto + "//" + location.host + "/ws?url=" + pageURL;
     ws = new WebSocket(url);
 
     ws.onopen = function() {
@@ -150,7 +83,12 @@
 
   function send(cmd, payload, ref) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ cmd: cmd, payload: payload || {}, ref: ref || "" }));
+    ws.send(JSON.stringify({
+      cmd: cmd,
+      payload: payload || {},
+      ref: ref || "",
+      url: location.pathname + location.search
+    }));
   }
 
   // --- Response handling ---
@@ -237,9 +175,6 @@
         if (fn) fn(ins.args || {});
         else console.warn("gotk: unknown function:", ins.name);
         break;
-      case "cmd":
-        send(ins.cmd, ins.payload);
-        break;
       default:
         console.warn("gotk: unknown instruction op:", ins.op);
     }
@@ -301,17 +236,68 @@
     }
   }
 
+  // --- SPA navigation ---
+
   function applyNavigate(ins) {
-    if (ins.url) {
-      history.pushState(null, "", ins.url);
-    }
     if (ins.target && ins.html) {
+      // Inline content swap: server provided the HTML directly
+      if (ins.url) history.pushState(null, "", ins.url);
       var target = document.querySelector(ins.target);
       if (target) {
         target.innerHTML = sanitizeHTML(ins.html);
         scanElement(target);
       }
+    } else if (ins.url) {
+      // SPA fetch: load the page and swap content
+      doNavigate(ins.url);
     }
+  }
+
+  function doNavigate(url, opts) {
+    opts = opts || {};
+    var pushState = opts.pushState !== false;
+
+    fetch(url, { headers: { Accept: "text/html" } })
+      .then(function(resp) {
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        return resp.text();
+      })
+      .then(function(html) {
+        var parser = new DOMParser();
+        var doc = parser.parseFromString(html, "text/html");
+
+        // Swap title
+        document.title = doc.title;
+
+        // Swap header-inner (header-actions differ per page)
+        var newHeader = doc.querySelector(".header-inner");
+        var curHeader = document.querySelector(".header-inner");
+        if (newHeader && curHeader) {
+          curHeader.innerHTML = newHeader.innerHTML;
+          scanElement(curHeader);
+        }
+
+        // Swap app-layout (sidebar + main content)
+        var newLayout = doc.querySelector(".app-layout");
+        var curLayout = document.querySelector(".app-layout");
+        if (newLayout && curLayout) {
+          curLayout.innerHTML = newLayout.innerHTML;
+          scanElement(curLayout);
+        }
+
+        // Update URL
+        if (pushState) {
+          history.pushState(null, "", url);
+        }
+
+        // Post-swap initialization (registered by app code)
+        var initFn = registeredFns["initPage"];
+        if (initFn) initFn();
+      })
+      .catch(function(err) {
+        console.warn("gotk: SPA navigation failed, falling back:", err);
+        window.location.href = url;
+      });
   }
 
   // --- Payload collection ---
@@ -409,9 +395,7 @@
       el.addEventListener("click", function(e) {
         e.preventDefault();
         var url = el.getAttribute("href") || el.getAttribute("gotk-navigate");
-        if (url) {
-          dispatchCommand("navigate", { url: url }, nextRef());
-        }
+        if (url) doNavigate(url);
       });
     }
 
@@ -466,14 +450,13 @@
   // --- Popstate ---
 
   window.addEventListener("popstate", function() {
-    dispatchCommand("navigate", { url: location.pathname + location.search }, nextRef());
+    doNavigate(location.pathname + location.search, { pushState: false });
   });
 
   // --- Init ---
 
   document.addEventListener("DOMContentLoaded", function() {
     scanElement(document.body);
-    initWASM();
     connect();
   });
 })();

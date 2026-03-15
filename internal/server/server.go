@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,7 +18,7 @@ import (
 	"github.com/esnunes/prompter/internal/db"
 )
 
-//go:embed templates
+//go:embed templates conversation.html
 var templatesFS embed.FS
 
 //go:embed static
@@ -30,17 +32,27 @@ type repoStatusEntry struct {
 }
 
 type Server struct {
-	queries    *db.Queries
-	pages      map[string]*template.Template
-	gotkMux    *gotk.Mux
-	httpSrv    *http.Server
-	ln         net.Listener
-	addr       string
+	queries *db.Queries
+	pages   map[string]*template.Template
+	gotkMux *gotk.Mux
+	httpSrv     *http.Server
+	ln          net.Listener
+	addr        string
 	sessionMu   sync.Map // per-session mutex: session ID → *sync.Mutex
 	repoStatus  sync.Map // per-prompt-request status: prompt request ID (int64) → repoStatusEntry
 	cancelFuncs sync.Map // per-prompt-request cancel: prompt request ID (int64) → context.CancelFunc
 	repoMu      sync.Map // per-repo mutex: repo URL (string) → *sync.Mutex
-	gotkConns   sync.Map // active gotk WebSocket connections: conn ID (int64) → *gotk.Conn
+}
+
+// render executes a named template from the conversation page and returns the HTML string.
+func (s *Server) render(name string, data any) string {
+	tmpl := s.pages["conversation.html"]
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+		log.Printf("render component %s: %v", name, err)
+		return ""
+	}
+	return buf.String()
 }
 
 var funcMap = template.FuncMap{
@@ -49,6 +61,17 @@ var funcMap = template.FuncMap{
 			return ""
 		}
 		return *s
+	},
+	// dict builds a map from alternating key/value pairs for use in templates.
+	// Usage: {{template "name" (dict "Key1" val1 "Key2" val2)}}
+	"dict": func(pairs ...any) map[string]any {
+		m := make(map[string]any, len(pairs)/2)
+		for i := 0; i+1 < len(pairs); i += 2 {
+			if k, ok := pairs[i].(string); ok {
+				m[k] = pairs[i+1]
+			}
+		}
+		return m
 	},
 }
 
@@ -64,13 +87,14 @@ func New(queries *db.Queries) (*Server, error) {
 		gotkMux: gotk.NewMux(),
 	}
 
+	// s.gotkMux.SetTemplates(componentTmpl)
 	s.registerGotkCommands()
 
-	s.gotkMux.HandleConnect(func(conn *gotk.Conn) {
-		s.gotkConns.Store(conn.ID(), conn)
-	})
-	s.gotkMux.HandleDisconnect(func(conn *gotk.Conn) {
-		s.gotkConns.Delete(conn.ID())
+	// Register view factory: creates the appropriate view for each URL
+	s.gotkMux.HandleView(func(url string, d *gotk.Dispatcher, vctx *gotk.ViewContext) {
+		if strings.Contains(url, "/prompt-requests/") {
+			NewConversationView(d, vctx, s)
+		}
 	})
 
 	mux := http.NewServeMux()
@@ -81,17 +105,13 @@ func New(queries *db.Queries) (*Server, error) {
 	}
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
-	// gotk: WebSocket endpoint, client JS, WASM runtime and binary
+	// gotk: WebSocket endpoint and client JS
 	mux.HandleFunc("GET /ws", s.gotkMux.ServeWebSocket)
 	mux.HandleFunc("GET /gotk/client.js", gotk.ClientJSHandler())
-	mux.HandleFunc("GET /gotk/wasm_exec.js", gotk.WasmExecJSHandler())
-	mux.HandleFunc("GET /gotk/app.wasm", gotk.AppWASMHandler())
 
 	mux.HandleFunc("GET /{$}", s.handleDashboard)
 	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests", s.handleRepoPage)
 	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests/{id}", s.handleShow)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/publish", s.handlePublish)
-	mux.HandleFunc("DELETE /github.com/{org}/{repo}/prompt-requests/{id}", s.handleDelete)
 
 	s.httpSrv = &http.Server{Handler: mux}
 	return s, nil
@@ -115,6 +135,11 @@ func parsePages() (map[string]*template.Template, error) {
 		return nil, fmt.Errorf("reading sidebar: %w", err)
 	}
 
+	// componentsBytes, err := fs.ReadFile(tmplFS, "components.html")
+	// if err != nil {
+	// 	return nil, fmt.Errorf("reading components: %w", err)
+	// }
+
 	pageNames := []string{
 		"dashboard.html",
 		"repo.html",
@@ -124,9 +149,13 @@ func parsePages() (map[string]*template.Template, error) {
 
 	pages := make(map[string]*template.Template, len(pageNames))
 	for _, name := range pageNames {
+		// Try templates/ subdir first, then package root (co-located templates).
 		pageBytes, err := fs.ReadFile(tmplFS, name)
 		if err != nil {
-			return nil, fmt.Errorf("reading %s: %w", name, err)
+			pageBytes, err = fs.ReadFile(templatesFS, name)
+			if err != nil {
+				return nil, fmt.Errorf("reading %s: %w", name, err)
+			}
 		}
 
 		tmpl, err := template.New("layout.html").Funcs(funcMap).Parse(string(layoutBytes))
@@ -137,6 +166,10 @@ func parsePages() (map[string]*template.Template, error) {
 		if _, err := tmpl.New("sidebar.html").Parse(string(sidebarBytes)); err != nil {
 			return nil, fmt.Errorf("parsing sidebar for %s: %w", name, err)
 		}
+
+		// if _, err := tmpl.New("components.html").Parse(string(componentsBytes)); err != nil {
+		// 	return nil, fmt.Errorf("parsing components for %s: %w", name, err)
+		// }
 
 		if _, err := tmpl.New(name).Parse(string(pageBytes)); err != nil {
 			return nil, fmt.Errorf("parsing %s: %w", name, err)
@@ -229,16 +262,5 @@ func (s *Server) lockRepo(repoURL string) *sync.Mutex {
 	mu := v.(*sync.Mutex)
 	mu.Lock()
 	return mu
-}
-
-// pushAll sends gotk instructions to all connected WebSocket clients.
-func (s *Server) pushAll(ins []gotk.Instruction) {
-	s.gotkConns.Range(func(_, v any) bool {
-		conn := v.(*gotk.Conn)
-		if err := conn.Push(ins); err != nil {
-			log.Printf("gotk: push error (conn %d): %v", conn.ID(), err)
-		}
-		return true
-	})
 }
 
