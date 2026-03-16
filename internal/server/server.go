@@ -13,6 +13,9 @@ import (
 	"time"
 
 	"github.com/esnunes/prompter/internal/db"
+	"github.com/esnunes/prompter/internal/models"
+	"github.com/esnunes/prompter/internal/server/hx"
+	"github.com/esnunes/prompter/internal/server/pages"
 )
 
 //go:embed templates
@@ -40,7 +43,7 @@ type Server struct {
 	repoMu      sync.Map // per-repo mutex: repo URL (string) → *sync.Mutex
 }
 
-var funcMap = template.FuncMap{
+var FuncMap = template.FuncMap{
 	"deref": func(s *string) string {
 		if s == nil {
 			return ""
@@ -50,25 +53,44 @@ var funcMap = template.FuncMap{
 }
 
 func New(queries *db.Queries) (*Server, error) {
-	pages, err := parsePages()
+	tmplPages, err := parsePages()
 	if err != nil {
 		return nil, err
 	}
 
 	s := &Server{
 		queries: queries,
-		pages:   pages,
+		pages:   tmplPages,
 	}
 
 	mux := http.NewServeMux()
 
+	// Static files
 	staticSub, err := fs.Sub(staticFS, "static")
 	if err != nil {
 		return nil, fmt.Errorf("getting static subfs: %w", err)
 	}
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
-	mux.HandleFunc("GET /{$}", s.handleDashboard)
+	// HX handlers
+	hxHandler, err := hx.New(queries)
+	if err != nil {
+		return nil, fmt.Errorf("creating hx handler: %w", err)
+	}
+	hxHandler.Register(mux)
+
+	// Pages handlers
+	tmplSubFS, err := fs.Sub(templatesFS, "templates")
+	if err != nil {
+		return nil, fmt.Errorf("getting templates subfs: %w", err)
+	}
+	pagesHandler, err := pages.New(queries, tmplSubFS, FuncMap, s.buildSidebarAny)
+	if err != nil {
+		return nil, fmt.Errorf("creating pages handler: %w", err)
+	}
+	pagesHandler.Register(mux)
+
+	// Existing routes
 	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests", s.handleRepoPage)
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests", s.handleCreate)
 	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests/{id}", s.handleShow)
@@ -106,7 +128,6 @@ func parsePages() (map[string]*template.Template, error) {
 	}
 
 	pageNames := []string{
-		"dashboard.html",
 		"repo.html",
 		"conversation.html",
 		"message_fragment.html",
@@ -122,7 +143,7 @@ func parsePages() (map[string]*template.Template, error) {
 			return nil, fmt.Errorf("reading %s: %w", name, err)
 		}
 
-		tmpl, err := template.New("layout.html").Funcs(funcMap).Parse(string(layoutBytes))
+		tmpl, err := template.New("layout.html").Funcs(FuncMap).Parse(string(layoutBytes))
 		if err != nil {
 			return nil, fmt.Errorf("parsing layout for %s: %w", name, err)
 		}
@@ -222,6 +243,10 @@ func (s *Server) lockRepo(repoURL string) *sync.Mutex {
 	mu := v.(*sync.Mutex)
 	mu.Lock()
 	return mu
+}
+
+func (s *Server) buildSidebarAny(prs []models.PromptRequest, scope string, currentID int64) any {
+	return s.buildSidebar(prs, scope, currentID)
 }
 
 func (s *Server) renderFragment(w http.ResponseWriter, name string, data any) {
