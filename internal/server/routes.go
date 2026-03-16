@@ -65,7 +65,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) error {
 		SetRepoStatus:     s.setRepoStatus,
 		AsyncEnsureCloned: convPage.AsyncEnsureCloned,
 	}
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests", createPR.Handle)
+	mux.HandleFunc("POST /hx/create-prompt-request", createPR.Handle)
 
 	// Shared HX fragments
 	hxHandler := hx.New(s.tmpls["dashboard"], s.queries, s.getRepoStatusString)

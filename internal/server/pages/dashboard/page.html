@@ -12,7 +12,7 @@
 {{if .Repositories}}
 <h3 class="mb-4">Your repositories</h3>
 {{range .Repositories}}
-<a href="/{{.URL}}/prompt-requests" class="card card-link">
+<a hx-boost="true" href="/{{.URL}}/prompt-requests" class="card card-link">
   <div class="pr-title">{{.URL}}</div>
   <div class="pr-meta">
     <span>{{.ActivePRCount}} prompt requests</span>

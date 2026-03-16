@@ -17,9 +17,7 @@ type CreatePromptRequestHandler struct {
 }
 
 func (h *CreatePromptRequestHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	org := r.PathValue("org")
-	repoName := r.PathValue("repo")
-	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
+	repoURL := r.FormValue("repo_url")
 
 	localPath, err := repo.LocalPath(repoURL)
 	if err != nil {
@@ -52,5 +50,6 @@ func (h *CreatePromptRequestHandler) Handle(w http.ResponseWriter, r *http.Reque
 
 	go h.AsyncEnsureCloned(pr.ID, repoURL)
 
-	http.Redirect(w, r, fmt.Sprintf("/github.com/%s/%s/prompt-requests/%d", org, repoName, pr.ID), http.StatusSeeOther)
+	w.Header().Set("HX-Location", fmt.Sprintf("/%s/prompt-requests/%d", repoURL, pr.ID))
+	w.WriteHeader(http.StatusOK)
 }

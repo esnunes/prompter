@@ -7,7 +7,7 @@
   <ul class="prompt-list">
     {{range .Items}}
     <li id="prompt-{{.ID}}" class="prompt-list-item{{if eq .ID $.CurrentID}} prompt-list-item-active{{end}}{{if .Unread}} prompt-list-item-unread{{end}}">
-      <a href="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.ID}}" class="prompt-list-link">
+      <a hx-boost="true" href="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.ID}}" class="prompt-list-link">
         <div class="prompt-list-title">
           {{if .Title}}{{.Title}}{{else}}Untitled{{end}}
         </div>
