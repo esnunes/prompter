@@ -1,0 +1,74 @@
+{{define "title"}}{{.RepoURL}} — Prompter{{end}}
+
+{{define "header-actions"}}
+<a href="/" class="btn btn-secondary btn-sm">&larr; Dashboard</a>
+{{if not .Error}}
+<form method="POST" action="/github.com/{{.Org}}/{{.Repo}}/prompt-requests">
+  <button type="submit" class="btn btn-primary btn-sm">New prompt request</button>
+</form>
+{{end}}
+{{end}}
+
+{{define "content"}}
+{{if .Error}}
+<div class="empty-state">
+  <h2>Repository not found</h2>
+  <p>{{.Error}}</p>
+  <a href="/" class="btn btn-secondary">Back to dashboard</a>
+</div>
+{{else}}
+<div class="dashboard-header">
+  <h2>{{.RepoURL}}</h2>
+  <label class="archive-toggle">
+    <input type="checkbox" {{if .ShowArchived}}checked{{end}}
+           onchange="window.location.href = this.checked ? '?archived=1' : window.location.pathname">
+    Show archived
+  </label>
+</div>
+
+{{if .PromptRequests}}
+{{range .PromptRequests}}
+<a href="/github.com/{{$.Org}}/{{$.Repo}}/prompt-requests/{{.ID}}" class="card card-link">
+  <div class="pr-title">
+    {{if .Title}}{{.Title}}{{else}}Untitled{{end}}
+    <span class="badge {{if eq .Status "published"}}badge-published{{else}}badge-draft{{end}}">{{.Status}}</span>
+  </div>
+  <div class="pr-meta">
+    <span>{{.MessageCount}} messages</span>
+    {{if gt .RevisionCount 0}}<span>{{.RevisionCount}} revisions</span>{{end}}
+    <span>{{.CreatedAt.Format "Jan 2, 2006"}}</span>
+  </div>
+  {{if $.ShowArchived}}
+  <span class="card-action" role="button" tabindex="0"
+        aria-label="Unarchive prompt"
+        onclick="event.preventDefault(); event.stopPropagation(); fetch('/github.com/{{$.Org}}/{{$.Repo}}/prompt-requests/{{.ID}}/unarchive', {method:'POST'}).then(function(){location.reload()});"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 5h12v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5z"/><path d="M8 11V7"/><path d="M6 9l2-2 2 2"/>
+    </svg>
+  </span>
+  {{else}}
+  <span class="card-action" role="button" tabindex="0"
+        aria-label="Archive prompt"
+        onclick="event.preventDefault(); event.stopPropagation(); var msg='Archive this prompt request?'; {{if .IssueURL}}msg+=' The linked GitHub issue will remain open.';{{end}} if(confirm(msg)){fetch('/github.com/{{$.Org}}/{{$.Repo}}/prompt-requests/{{.ID}}/archive', {method:'POST'}).then(function(){location.reload()});}"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 5h12v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5z"/><path d="M8 7v4"/><path d="M6 9l2 2 2-2"/>
+    </svg>
+  </span>
+  {{end}}
+</a>
+{{end}}
+{{else}}
+<div class="empty-state">
+  {{if .ShowArchived}}
+  <h2>No archived prompt requests</h2>
+  <p>You haven't archived any prompt requests for this repository.</p>
+  {{else}}
+  <h2>No prompt requests yet</h2>
+  <p>Create your first prompt request to start an AI-guided conversation about a feature for this repository.</p>
+  {{end}}
+</div>
+{{end}}
+{{end}}
+{{end}}
