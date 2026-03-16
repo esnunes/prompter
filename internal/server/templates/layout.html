@@ -7,15 +7,15 @@
   <link rel="stylesheet" href="/static/tokens.css">
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/htmx.min.js"></script>
-  <script src="/static/idiomorph-ext.min.js"></script>
+  <script src="/static/ws.js"></script>
   <script src="/static/marked.min.js"></script>
   <script src="/static/purify.min.js"></script>
   <script src="/static/app.js"></script>
 </head>
-<body hx-ext="morph">
+<body hx-ext="ws" ws-connect="/ws">
   <header class="header">
     <div class="header-inner">
-      <h1><a href="/">Prompter</a></h1>
+      <h1><a href="/" hx-boost="true">Prompter</a></h1>
       {{block "header-actions" .}}{{end}}
     </div>
   </header>

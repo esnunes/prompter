@@ -1,0 +1,14 @@
+{{define "go_to_repo_form"}}
+<div class="card mb-4" id="go-to-repo-form"{{if .OOB}} hx-swap-oob="true"{{end}}>
+  <form ws-send>
+    <label for="repo_url">Go to repository</label>
+    <div style="display:flex;gap:var(--space-3);margin-top:var(--space-2);">
+      <input type="text" id="repo_url" name="repo_url" placeholder="github.com/owner/repo" style="flex:1;"{{if .Value}} value="{{.Value}}"{{end}}>
+      <button type="submit" name="command" value="go-to-repository" class="btn btn-primary">Go</button>
+    </div>
+    {{if .Error}}
+    <p class="text-error" style="margin-top:var(--space-2);">{{.Error}}</p>
+    {{end}}
+  </form>
+</div>
+{{end}}

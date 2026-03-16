@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"fmt"
@@ -9,10 +10,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/esnunes/prompter/internal/db"
+	"github.com/esnunes/prompter/internal/repo"
 )
 
 //go:embed templates
@@ -29,11 +32,11 @@ type repoStatusEntry struct {
 }
 
 type Server struct {
-	queries    *db.Queries
-	pages      map[string]*template.Template
-	httpSrv    *http.Server
-	ln         net.Listener
-	addr       string
+	queries     *db.Queries
+	pages       map[string]*template.Template
+	httpSrv     *http.Server
+	ln          net.Listener
+	addr        string
 	sessionMu   sync.Map // per-session mutex: session ID → *sync.Mutex
 	repoStatus  sync.Map // per-prompt-request status: prompt request ID (int64) → repoStatusEntry
 	cancelFuncs sync.Map // per-prompt-request cancel: prompt request ID (int64) → context.CancelFunc
@@ -82,9 +85,48 @@ func New(queries *db.Queries) (*Server, error) {
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/archive", s.handleArchive)
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/unarchive", s.handleUnarchive)
 	mux.HandleFunc("GET /api/sidebar", s.handleSidebarFragment)
+	mux.HandleFunc("GET /ws", s.handleWS)
+
+	s.registerWSCommands()
 
 	s.httpSrv = &http.Server{Handler: mux}
 	return s, nil
+}
+
+func (s *Server) registerWSCommands() {
+	s.HandleWS("go-to-repository", s.wsGoToRepository)
+}
+
+func (s *Server) wsGoToRepository(ctx *WSCommandContext) {
+	repoURL, _ := ctx.Params["repo_url"].(string)
+	repoURL = strings.TrimSpace(repoURL)
+	repoURL = strings.TrimPrefix(repoURL, "https://")
+	repoURL = strings.TrimPrefix(repoURL, "http://")
+	repoURL = strings.TrimSuffix(repoURL, "/")
+
+	sendError := func(msg string) {
+		var buf bytes.Buffer
+		data := goToRepoFormData{OOB: true, Value: repoURL, Error: msg}
+		if err := s.pages["go_to_repo_form.html"].ExecuteTemplate(&buf, "go_to_repo_form", data); err != nil {
+			log.Printf("render error (go_to_repo_form): %v", err)
+			return
+		}
+		ctx.Conn.Send(buf.Bytes())
+	}
+
+	if repoURL == "" {
+		sendError("Please enter a repository URL.")
+		return
+	}
+
+	if err := repo.ValidateURL(repoURL); err != nil {
+		sendError("Invalid repository URL. Expected format: github.com/owner/repo")
+		return
+	}
+
+	ctx.Conn.SendEvents([]map[string]any{
+		{"hx-location": "/" + repoURL + "/prompt-requests"},
+	})
 }
 
 // parsePages builds a template for each page by combining layout.html, shared partials, and the page template.
@@ -100,9 +142,17 @@ func parsePages() (map[string]*template.Template, error) {
 	}
 
 	// Shared partials included in every page template
-	sidebarBytes, err := fs.ReadFile(tmplFS, "sidebar.html")
-	if err != nil {
-		return nil, fmt.Errorf("reading sidebar: %w", err)
+	partialNames := []string{
+		"sidebar.html",
+		"go_to_repo_form.html",
+	}
+	partials := make(map[string][]byte, len(partialNames))
+	for _, name := range partialNames {
+		b, err := fs.ReadFile(tmplFS, name)
+		if err != nil {
+			return nil, fmt.Errorf("reading partial %s: %w", name, err)
+		}
+		partials[name] = b
 	}
 
 	pageNames := []string{
@@ -113,6 +163,7 @@ func parsePages() (map[string]*template.Template, error) {
 		"status_fragment.html",
 		"sidebar.html",
 		"archive_banner_fragment.html",
+		"go_to_repo_form.html",
 	}
 
 	pages := make(map[string]*template.Template, len(pageNames))
@@ -127,8 +178,10 @@ func parsePages() (map[string]*template.Template, error) {
 			return nil, fmt.Errorf("parsing layout for %s: %w", name, err)
 		}
 
-		if _, err := tmpl.New("sidebar.html").Parse(string(sidebarBytes)); err != nil {
-			return nil, fmt.Errorf("parsing sidebar for %s: %w", name, err)
+		for pName, pBytes := range partials {
+			if _, err := tmpl.New(pName).Parse(string(pBytes)); err != nil {
+				return nil, fmt.Errorf("parsing partial %s for %s: %w", pName, name, err)
+			}
 		}
 
 		if _, err := tmpl.New(name).Parse(string(pageBytes)); err != nil {
@@ -197,11 +250,15 @@ func (s *Server) lockSession(sessionID string) *sync.Mutex {
 
 func (s *Server) setRepoStatus(prID int64, status, errMsg string) {
 	s.repoStatus.Store(prID, repoStatusEntry{Status: status, Error: errMsg})
+	s.broadcastTrigger("conversation-updated", map[string]any{"id": prID})
+	s.broadcastTrigger("prompt-updated", nil)
 }
 
 func (s *Server) setRepoStatusProcessing(prID int64, cancelFunc context.CancelFunc) {
 	s.repoStatus.Store(prID, repoStatusEntry{Status: "processing", StartedAt: time.Now()})
 	s.cancelFuncs.Store(prID, cancelFunc)
+	s.broadcastTrigger("conversation-updated", map[string]any{"id": prID})
+	s.broadcastTrigger("prompt-updated", nil)
 }
 
 func (s *Server) clearCancelFunc(prID int64) {

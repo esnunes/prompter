@@ -1,22 +1,22 @@
 {{if eq .Status "cloning"}}
 <div id="repo-status" class="repo-status"
      hx-get="{{.PollURL}}"
-     hx-trigger="every 2s"
-     hx-swap="morph:outerHTML">
+     hx-trigger="conversation-updated from:body"
+     hx-swap="outerHTML">
   <div class="spinner"></div> Cloning repository...
 </div>
 {{else if eq .Status "pulling"}}
 <div id="repo-status" class="repo-status"
      hx-get="{{.PollURL}}"
-     hx-trigger="every 2s"
-     hx-swap="morph:outerHTML">
+     hx-trigger="conversation-updated from:body"
+     hx-swap="outerHTML">
   <div class="spinner"></div> Pulling latest changes...
 </div>
 {{else if eq .Status "processing"}}
 <div id="repo-status" class="repo-status"
      hx-get="{{.PollURL}}"
-     hx-trigger="every 2s"
-     hx-swap="morph:outerHTML"
+     hx-trigger="conversation-updated from:body"
+     hx-swap="outerHTML"
      data-started-at="{{.StartedAt}}">
   <div class="processing-indicator">
     <div class="spinner"></div>

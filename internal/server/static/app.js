@@ -1,3 +1,53 @@
+// WebSocket event interceptor: intercept JSON messages with HX-* headers
+// before the HTMX ws extension processes them as HTML for OOB swap.
+document.addEventListener("htmx:wsBeforeMessage", function (event) {
+  var msg = event.detail.message;
+  try {
+    var data = JSON.parse(msg);
+    if (data.events && Array.isArray(data.events)) {
+      processWsEvents(data.events);
+      event.preventDefault();
+      return;
+    }
+  } catch (e) {
+    // Not JSON — let it pass through for standard OOB swap
+  }
+});
+
+function processWsEvents(events) {
+  events.forEach(function (evt) {
+    console.log("ws: processing event from server:", evt);
+    if (evt["hx-location"]) {
+      htmx.ajax("GET", evt["hx-location"]);
+    }
+    if (evt["hx-trigger"]) {
+      processHXTrigger(evt["hx-trigger"]);
+    }
+    if (evt["hx-redirect"]) {
+      window.location.href = evt["hx-redirect"];
+    }
+    if (evt["hx-refresh"]) {
+      window.location.reload();
+    }
+    if (evt["hx-push-url"]) {
+      history.pushState({}, "", evt["hx-push-url"]);
+    }
+    if (evt["hx-replace-url"]) {
+      history.replaceState({}, "", evt["hx-replace-url"]);
+    }
+  });
+}
+
+function processHXTrigger(trigger) {
+  if (typeof trigger === "string") {
+    htmx.trigger(document.body, trigger);
+  } else {
+    Object.keys(trigger).forEach(function (name) {
+      htmx.trigger(document.body, name, trigger[name]);
+    });
+  }
+}
+
 // Scroll to first question if present, otherwise scroll to bottom
 function scrollConversation() {
   var c = document.getElementById("conversation");
