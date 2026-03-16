@@ -116,7 +116,7 @@ func sortSidebarItems(items []SidebarItem) {
 	}
 }
 
-func (h *Handler) handleSidebarFragment(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleSidebar(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
 	repoURL := r.URL.Query().Get("repo_url")
 	currentID, _ := strconv.ParseInt(r.URL.Query().Get("current_id"), 10, 64)
@@ -136,7 +136,7 @@ func (h *Handler) handleSidebarFragment(w http.ResponseWriter, r *http.Request) 
 
 	sidebar := BuildSidebar(prs, scope, currentID, h.getRepoStatus)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.sidebarTmpl.ExecuteTemplate(w, "sidebar.html", sidebar); err != nil {
+	if err := h.tmpl.ExecuteTemplate(w, "hx/sidebar.html", sidebar); err != nil {
 		log.Printf("render error (sidebar): %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
