@@ -21,7 +21,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) error {
 	// --- Pages ---
 
 	dashboardPage := &dashboard.Page{
-		Tmpl:         s.tmpl,
+		Tmpl:         s.tmpls["dashboard"],
 		Queries:      s.queries,
 		BuildSidebar: s.buildSidebarAny,
 	}
@@ -29,14 +29,14 @@ func (s *Server) registerRoutes(mux *http.ServeMux) error {
 	mux.HandleFunc("POST /hx/dashboard/create-repository", dashboardPage.HandleCreateRepository)
 
 	repoPage := &repo.Page{
-		Tmpl:         s.tmpl,
+		Tmpl:         s.tmpls["repo"],
 		Queries:      s.queries,
 		BuildSidebar: s.buildSidebarAny,
 	}
 	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests", repoPage.HandlePage)
 
 	convPage := &conversation.Page{
-		Tmpl:                    s.tmpl,
+		Tmpl:                    s.tmpls["conversation"],
 		Queries:                 s.queries,
 		BuildSidebar:            s.buildSidebarAny,
 		GetRepoStatus:           s.getRepoStatus,
@@ -68,7 +68,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) error {
 	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests", createPR.Handle)
 
 	// Shared HX fragments
-	hxHandler := hx.New(s.tmpl, s.queries, s.getRepoStatusString)
+	hxHandler := hx.New(s.tmpls["dashboard"], s.queries, s.getRepoStatusString)
 	mux.HandleFunc("GET /hx/sidebar", hxHandler.HandleSidebar)
 
 	return nil

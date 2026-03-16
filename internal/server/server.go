@@ -17,7 +17,7 @@ import (
 
 type Server struct {
 	queries     *db.Queries
-	tmpl        *template.Template
+	tmpls       map[string]*template.Template
 	httpSrv     *http.Server
 	ln          net.Listener
 	addr        string
@@ -28,14 +28,14 @@ type Server struct {
 }
 
 func New(queries *db.Queries) (*Server, error) {
-	tmpl, err := loadTemplates()
+	tmpls, err := loadTemplates()
 	if err != nil {
 		return nil, fmt.Errorf("loading templates: %w", err)
 	}
 
 	s := &Server{
 		queries: queries,
-		tmpl:    tmpl,
+		tmpls:   tmpls,
 	}
 
 	mux := http.NewServeMux()
