@@ -110,7 +110,7 @@
         <div id="repo-status" class="repo-status"
              hx-get="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/status"
              hx-trigger="every 2s"
-             hx-swap="morph:outerHTML"
+             hx-swap="outerHTML"
              data-started-at="{{.RepoStartedAt}}">
           <div class="processing-indicator">
             <div class="spinner"></div>
@@ -140,7 +140,7 @@
         <div id="repo-status" class="repo-status"
              hx-get="/github.com/{{.Org}}/{{.Repo}}/prompt-requests/{{.PromptRequest.ID}}/status"
              hx-trigger="every 2s"
-             hx-swap="morph:outerHTML">
+             hx-swap="outerHTML">
           <div class="spinner"></div>
           {{if eq .RepoStatus "cloning"}}Cloning repository...{{else if eq .RepoStatus "pulling"}}Pulling latest changes...{{else}}Preparing repository...{{end}}
         </div>

@@ -1143,6 +1143,13 @@ label {
   justify-content: space-between;
 }
 
+.form-error {
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+  margin-top: var(--space-1);
+  margin-bottom: var(--space-1);
+}
+
 .processing-indicator {
   display: flex;
   align-items: center;

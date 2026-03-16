@@ -85,7 +85,7 @@ func (h *Handler) handleCreateRepository(w http.ResponseWriter, r *http.Request)
 
 	// Extract org/repo from validated URL (github.com/org/repo)
 	parts := strings.SplitN(repoURL, "/", 3)
-	redirectURL := "/" + parts[0] + "/" + parts[1] + "/" + parts[2] + "/prompt-requests"
-	w.Header().Set("HX-Redirect", redirectURL)
+	locationURL := "/" + parts[0] + "/" + parts[1] + "/" + parts[2] + "/prompt-requests"
+	w.Header().Set("HX-Location", locationURL)
 	w.WriteHeader(http.StatusOK)
 }
