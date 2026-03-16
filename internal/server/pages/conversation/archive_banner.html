@@ -1,0 +1,10 @@
+<div class="archive-banner" id="archive-banner">
+  <span>This prompt request is archived.</span>
+  <form hx-post="/hx/conversation/unarchive"
+        hx-target="#archive-banner"
+        hx-swap="outerHTML"
+        style="display:inline;">
+    <input type="hidden" name="id" value="{{.PromptRequest.ID}}">
+    <button type="submit" class="btn btn-sm btn-secondary">Unarchive</button>
+  </form>
+</div>

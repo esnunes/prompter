@@ -1,0 +1,64 @@
+{{range .Messages}}
+<div class="message message-{{.Role}}">
+  <div class="message-bubble">{{.Content}}</div>
+</div>
+{{end}}
+
+{{if .Questions}}
+<div class="question-block" id="question-form">
+  <form hx-post="/hx/conversation/send-message"
+        hx-target="#conversation"
+        hx-swap="beforeend"
+        hx-disabled-elt="find button"
+        hx-on::after-request="this.closest('.question-block').remove(); document.getElementById('message-form').style.display = ''; scrollConversation();">
+    <input type="hidden" name="id" value="{{.PromptRequestID}}">
+    {{range $q := .Questions}}
+    <div class="question-group">
+      {{if $q.Header}}<span class="question-header">{{$q.Header}}</span>{{end}}
+      <h4>{{$q.Text}}</h4>
+      <input type="hidden" name="q_{{$q.Index}}_header" value="{{$q.Header}}">
+      <div class="options-list">
+        {{range $q.Options}}
+        <label class="option-item">
+          {{if $q.MultiSelect}}<input type="checkbox" name="q_{{$q.Index}}" value="{{.Label}}">
+          {{else}}<input type="radio" name="q_{{$q.Index}}" value="{{.Label}}">
+          {{end}}
+          <div>
+            <div class="option-label">{{.Label}}</div>
+            <div class="option-description">{{.Description}}</div>
+          </div>
+        </label>
+        {{end}}
+        <label class="option-item other-option">
+          {{if $q.MultiSelect}}<input type="checkbox" name="q_{{$q.Index}}" value="__other__">
+          {{else}}<input type="radio" name="q_{{$q.Index}}" value="__other__">
+          {{end}}
+          <div>
+            <div class="option-label">Other</div>
+          </div>
+        </label>
+      </div>
+      <input type="text" name="q_{{$q.Index}}_other" class="other-input" placeholder="Type your answer..." maxlength="500">
+    </div>
+    {{end}}
+    <div class="mt-4">
+      <button type="submit" class="btn btn-primary">Answer</button>
+    </div>
+    <div class="htmx-indicator"><div class="spinner"></div> Thinking...</div>
+  </form>
+</div>
+{{end}}
+
+{{if .PromptReady}}
+<div class="prompt-ready">
+  <p>Prompt is ready to publish!</p>
+  <form hx-post="/hx/conversation/publish"
+        hx-target="body"
+        hx-swap="innerHTML"
+        hx-disabled-elt="find button">
+    <input type="hidden" name="id" value="{{.PromptRequestID}}">
+    <button type="submit" class="btn btn-primary">Publish to GitHub</button>
+    <div class="htmx-indicator"><div class="spinner"></div> Publishing...</div>
+  </form>
+</div>
+{{end}}
