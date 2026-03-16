@@ -1,0 +1,10 @@
+<form hx-post="/hx/repositories" hx-swap="outerHTML">
+  <label for="repo_url">Go to repository</label>
+  {{if .Error}}
+  <div class="form-error">{{.Error}}</div>
+  {{end}}
+  <div style="display:flex;gap:var(--space-3);margin-top:var(--space-2);">
+    <input type="text" name="repo_url" id="repo_url" placeholder="github.com/owner/repo" value="{{.RepoURL}}" style="flex:1;">
+    <button type="submit" class="btn btn-primary">Go</button>
+  </div>
+</form>
