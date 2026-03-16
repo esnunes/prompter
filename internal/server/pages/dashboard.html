@@ -1,0 +1,29 @@
+{{define "title"}}Prompter — Dashboard{{end}}
+
+{{define "content"}}
+<div class="dashboard-header">
+  <h2>Dashboard</h2>
+</div>
+
+<div class="card mb-4">
+  {{template "repo_form.html" .Form}}
+</div>
+
+{{if .Repositories}}
+<h3 class="mb-4">Your repositories</h3>
+{{range .Repositories}}
+<a href="/{{.URL}}/prompt-requests" class="card card-link">
+  <div class="pr-title">{{.URL}}</div>
+  <div class="pr-meta">
+    <span>{{.ActivePRCount}} prompt requests</span>
+    <span>Last activity: {{.LastActivity.Format "Jan 2, 2006"}}</span>
+  </div>
+</a>
+{{end}}
+{{else}}
+<div class="empty-state">
+  <h2>No repositories yet</h2>
+  <p>Enter a repository URL above to get started.</p>
+</div>
+{{end}}
+{{end}}
