@@ -2,11 +2,8 @@ package server
 
 import (
 	"context"
-	"embed"
 	"fmt"
 	"html/template"
-	"io/fs"
-	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -15,150 +12,38 @@ import (
 	"github.com/esnunes/prompter/internal/db"
 	"github.com/esnunes/prompter/internal/models"
 	"github.com/esnunes/prompter/internal/server/hx"
-	"github.com/esnunes/prompter/internal/server/pages"
+	"github.com/esnunes/prompter/internal/server/pages/conversation"
 )
 
-//go:embed templates
-var templatesFS embed.FS
-
-//go:embed static
-var staticFS embed.FS
-
-// repoStatusEntry tracks the state of an async clone/pull or AI processing operation.
-type repoStatusEntry struct {
-	Status    string    // "cloning", "pulling", "ready", "processing", "responded", "cancelled", "error"
-	Error     string    // error message if Status == "error"
-	StartedAt time.Time // when processing started (zero for non-processing states)
-}
-
 type Server struct {
-	queries    *db.Queries
-	pages      map[string]*template.Template
-	httpSrv    *http.Server
-	ln         net.Listener
-	addr       string
+	queries     *db.Queries
+	tmpl        *template.Template
+	httpSrv     *http.Server
+	ln          net.Listener
+	addr        string
 	sessionMu   sync.Map // per-session mutex: session ID → *sync.Mutex
-	repoStatus  sync.Map // per-prompt-request status: prompt request ID (int64) → repoStatusEntry
+	repoStatus  sync.Map // per-prompt-request status: prompt request ID (int64) → conversation.RepoStatusEntry
 	cancelFuncs sync.Map // per-prompt-request cancel: prompt request ID (int64) → context.CancelFunc
 	repoMu      sync.Map // per-repo mutex: repo URL (string) → *sync.Mutex
 }
 
-var FuncMap = template.FuncMap{
-	"deref": func(s *string) string {
-		if s == nil {
-			return ""
-		}
-		return *s
-	},
-}
-
 func New(queries *db.Queries) (*Server, error) {
-	tmplPages, err := parsePages()
+	tmpl, err := loadTemplates()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("loading templates: %w", err)
 	}
 
 	s := &Server{
 		queries: queries,
-		pages:   tmplPages,
+		tmpl:    tmpl,
 	}
 
 	mux := http.NewServeMux()
-
-	// Static files
-	staticSub, err := fs.Sub(staticFS, "static")
-	if err != nil {
-		return nil, fmt.Errorf("getting static subfs: %w", err)
+	if err := s.registerRoutes(mux); err != nil {
+		return nil, fmt.Errorf("registering routes: %w", err)
 	}
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
-
-	// HX handlers
-	hxHandler, err := hx.New(queries)
-	if err != nil {
-		return nil, fmt.Errorf("creating hx handler: %w", err)
-	}
-	hxHandler.Register(mux)
-
-	// Pages handlers
-	tmplSubFS, err := fs.Sub(templatesFS, "templates")
-	if err != nil {
-		return nil, fmt.Errorf("getting templates subfs: %w", err)
-	}
-	pagesHandler, err := pages.New(queries, tmplSubFS, FuncMap, s.buildSidebarAny)
-	if err != nil {
-		return nil, fmt.Errorf("creating pages handler: %w", err)
-	}
-	pagesHandler.Register(mux)
-
-	// Existing routes
-	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests", s.handleRepoPage)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests", s.handleCreate)
-	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests/{id}", s.handleShow)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/messages", s.handleSendMessage)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/publish", s.handlePublish)
-	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests/{id}/status", s.handleRepoStatus)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/retry", s.handleRetry)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/cancel", s.handleCancel)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/resend", s.handleResend)
-	mux.HandleFunc("DELETE /github.com/{org}/{repo}/prompt-requests/{id}", s.handleDelete)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/archive", s.handleArchive)
-	mux.HandleFunc("POST /github.com/{org}/{repo}/prompt-requests/{id}/unarchive", s.handleUnarchive)
-	mux.HandleFunc("GET /api/sidebar", s.handleSidebarFragment)
-
 	s.httpSrv = &http.Server{Handler: mux}
 	return s, nil
-}
-
-// parsePages builds a template for each page by combining layout.html, shared partials, and the page template.
-func parsePages() (map[string]*template.Template, error) {
-	tmplFS, err := fs.Sub(templatesFS, "templates")
-	if err != nil {
-		return nil, fmt.Errorf("getting templates subfs: %w", err)
-	}
-
-	layoutBytes, err := fs.ReadFile(tmplFS, "layout.html")
-	if err != nil {
-		return nil, fmt.Errorf("reading layout: %w", err)
-	}
-
-	// Shared partials included in every page template
-	sidebarBytes, err := fs.ReadFile(tmplFS, "sidebar.html")
-	if err != nil {
-		return nil, fmt.Errorf("reading sidebar: %w", err)
-	}
-
-	pageNames := []string{
-		"repo.html",
-		"conversation.html",
-		"message_fragment.html",
-		"status_fragment.html",
-		"sidebar.html",
-		"archive_banner_fragment.html",
-	}
-
-	pages := make(map[string]*template.Template, len(pageNames))
-	for _, name := range pageNames {
-		pageBytes, err := fs.ReadFile(tmplFS, name)
-		if err != nil {
-			return nil, fmt.Errorf("reading %s: %w", name, err)
-		}
-
-		tmpl, err := template.New("layout.html").Funcs(FuncMap).Parse(string(layoutBytes))
-		if err != nil {
-			return nil, fmt.Errorf("parsing layout for %s: %w", name, err)
-		}
-
-		if _, err := tmpl.New("sidebar.html").Parse(string(sidebarBytes)); err != nil {
-			return nil, fmt.Errorf("parsing sidebar for %s: %w", name, err)
-		}
-
-		if _, err := tmpl.New(name).Parse(string(pageBytes)); err != nil {
-			return nil, fmt.Errorf("parsing %s: %w", name, err)
-		}
-
-		pages[name] = tmpl
-	}
-	return pages, nil
 }
 
 // Listen binds the server to the given address. Call Serve to start handling requests.
@@ -193,19 +78,7 @@ func (s *Server) Addr() string {
 	return s.addr
 }
 
-func (s *Server) renderPage(w http.ResponseWriter, name string, data any) {
-	tmpl, ok := s.pages[name]
-	if !ok {
-		log.Printf("template not found: %s", name)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := tmpl.ExecuteTemplate(w, "layout.html", data); err != nil {
-		log.Printf("render error (%s): %v", name, err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-	}
-}
+// State management
 
 // lockSession returns the mutex for a given session ID. Callers must
 // call Unlock when done to allow subsequent requests for the same session.
@@ -217,11 +90,11 @@ func (s *Server) lockSession(sessionID string) *sync.Mutex {
 }
 
 func (s *Server) setRepoStatus(prID int64, status, errMsg string) {
-	s.repoStatus.Store(prID, repoStatusEntry{Status: status, Error: errMsg})
+	s.repoStatus.Store(prID, conversation.RepoStatusEntry{Status: status, Error: errMsg})
 }
 
 func (s *Server) setRepoStatusProcessing(prID int64, cancelFunc context.CancelFunc) {
-	s.repoStatus.Store(prID, repoStatusEntry{Status: "processing", StartedAt: time.Now()})
+	s.repoStatus.Store(prID, conversation.RepoStatusEntry{Status: "processing", StartedAt: time.Now()})
 	s.cancelFuncs.Store(prID, cancelFunc)
 }
 
@@ -229,12 +102,12 @@ func (s *Server) clearCancelFunc(prID int64) {
 	s.cancelFuncs.Delete(prID)
 }
 
-func (s *Server) getRepoStatus(prID int64) repoStatusEntry {
+func (s *Server) getRepoStatus(prID int64) conversation.RepoStatusEntry {
 	v, ok := s.repoStatus.Load(prID)
 	if !ok {
-		return repoStatusEntry{}
+		return conversation.RepoStatusEntry{}
 	}
-	return v.(repoStatusEntry)
+	return v.(conversation.RepoStatusEntry)
 }
 
 // lockRepo returns the mutex for a given repo URL. Callers must call Unlock when done.
@@ -245,20 +118,10 @@ func (s *Server) lockRepo(repoURL string) *sync.Mutex {
 	return mu
 }
 
-func (s *Server) buildSidebarAny(prs []models.PromptRequest, scope string, currentID int64) any {
-	return s.buildSidebar(prs, scope, currentID)
+func (s *Server) getRepoStatusString(prID int64) string {
+	return s.getRepoStatus(prID).Status
 }
 
-func (s *Server) renderFragment(w http.ResponseWriter, name string, data any) {
-	tmpl, ok := s.pages[name]
-	if !ok {
-		log.Printf("fragment template not found: %s", name)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := tmpl.ExecuteTemplate(w, name, data); err != nil {
-		log.Printf("render error (%s): %v", name, err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-	}
+func (s *Server) buildSidebarAny(prs []models.PromptRequest, scope string, currentID int64) any {
+	return hx.BuildSidebar(prs, scope, currentID, s.getRepoStatusString)
 }
