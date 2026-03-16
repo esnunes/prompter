@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
@@ -14,7 +15,9 @@ type CreateRepositoryData struct {
 
 func (p *Page) renderCreateRepository(w http.ResponseWriter, data CreateRepositoryData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	p.Tmpl.ExecuteTemplate(w, "pages/dashboard/create_repository.html", data)
+	if err := p.Tmpl.ExecuteTemplate(w, "pages/dashboard/create_repository.html", data); err != nil {
+		log.Printf("render error (create_repository): %v", err)
+	}
 }
 
 // sanitizeRepoURL normalizes user input into the github.com/owner/repo format.

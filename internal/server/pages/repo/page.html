@@ -41,7 +41,7 @@
   {{if $.ShowArchived}}
   <span class="card-action" role="button" tabindex="0"
         aria-label="Unarchive prompt"
-        onclick="event.preventDefault(); event.stopPropagation(); fetch('/github.com/{{$.Org}}/{{$.Repo}}/prompt-requests/{{.ID}}/unarchive', {method:'POST'}).then(function(){location.reload()});"
+        onclick="event.preventDefault(); event.stopPropagation(); fetch('/hx/conversation/unarchive', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'id={{.ID}}'}).then(function(){location.reload()});"
         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <path d="M2 5h12v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5z"/><path d="M8 11V7"/><path d="M6 9l2-2 2 2"/>
@@ -50,7 +50,7 @@
   {{else}}
   <span class="card-action" role="button" tabindex="0"
         aria-label="Archive prompt"
-        onclick="event.preventDefault(); event.stopPropagation(); var msg='Archive this prompt request?'; {{if .IssueURL}}msg+=' The linked GitHub issue will remain open.';{{end}} if(confirm(msg)){fetch('/github.com/{{$.Org}}/{{$.Repo}}/prompt-requests/{{.ID}}/archive', {method:'POST'}).then(function(){location.reload()});}"
+        onclick="event.preventDefault(); event.stopPropagation(); var msg='Archive this prompt request?'; {{if .IssueURL}}msg+=' The linked GitHub issue will remain open.';{{end}} if(confirm(msg)){fetch('/hx/conversation/archive', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'id={{.ID}}'}).then(function(){location.reload()});}"
         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <path d="M2 5h12v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5z"/><path d="M8 7v4"/><path d="M6 9l2 2 2-2"/>
