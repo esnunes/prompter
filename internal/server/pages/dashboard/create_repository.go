@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/esnunes/prompter/internal/github"
 	"github.com/esnunes/prompter/internal/repo"
 )
 
@@ -46,6 +47,16 @@ func (p *Page) HandleCreateRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Extract org/repo for GitHub verification
+	parts := strings.SplitN(repoURL, "/", 3)
+	if err := github.VerifyRepo(r.Context(), parts[1], parts[2]); err != nil {
+		p.renderCreateRepository(w, CreateRepositoryData{
+			RepoURL: repoURL,
+			Error:   "This repository doesn't exist on GitHub or is not accessible.",
+		})
+		return
+	}
+
 	localPath, err := repo.LocalPath(repoURL)
 	if err != nil {
 		p.renderCreateRepository(w, CreateRepositoryData{
@@ -63,9 +74,7 @@ func (p *Page) HandleCreateRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract org/repo from validated URL (github.com/org/repo)
-	parts := strings.SplitN(repoURL, "/", 3)
-	locationURL := "/" + parts[0] + "/" + parts[1] + "/" + parts[2] + "/prompt-requests"
+	locationURL := "/" + repoURL + "/prompt-requests"
 	w.Header().Set("HX-Location", locationURL)
 	w.WriteHeader(http.StatusOK)
 }
