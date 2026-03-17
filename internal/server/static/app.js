@@ -1,3 +1,19 @@
+// Fixes the issue with htmx:confirm click event bubbling up causing parents
+// waiting for click events to be triggered.
+htmx.on('htmx:confirm', function (e) {
+  if (!e.detail.triggeringEvent) return;
+
+  e.detail.triggeringEvent.preventDefault();
+  e.detail.triggeringEvent.stopPropagation();
+  e.detail.triggeringEvent.stopImmediatePropagation();
+});
+
+// HX-Refresh performs a full browser reload. The refresh event does an ajax
+// refresh.
+htmx.on('refresh', function (e) {
+  htmx.ajax('GET', window.location.href, { target: 'body' });
+});
+
 // Scroll to first question if present, otherwise scroll to bottom
 function scrollConversation() {
   var c = document.getElementById("conversation");
