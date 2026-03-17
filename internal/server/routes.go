@@ -29,9 +29,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) error {
 	mux.HandleFunc("POST /hx/dashboard/create-repository", dashboardPage.HandleCreateRepository)
 
 	repoPage := &repo.Page{
-		Tmpl:         s.tmpls["repo"],
-		Queries:      s.queries,
-		BuildSidebar: s.buildSidebarAny,
+		Tmpl:    s.tmpls["repo"],
+		Queries: s.queries,
 	}
 	mux.HandleFunc("GET /github.com/{org}/{repo}/prompt-requests", repoPage.HandlePage)
 

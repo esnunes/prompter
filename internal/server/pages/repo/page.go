@@ -7,19 +7,15 @@ import (
 	"net/http"
 
 	"github.com/esnunes/prompter/internal/db"
-	"github.com/esnunes/prompter/internal/github"
 	"github.com/esnunes/prompter/internal/models"
-	repoLib "github.com/esnunes/prompter/internal/repo"
 )
 
 type Page struct {
-	Tmpl         *template.Template
-	Queries      *db.Queries
-	BuildSidebar func(prs []models.PromptRequest, scope string, currentID int64) any
+	Tmpl    *template.Template
+	Queries *db.Queries
 }
 
 type pageData struct {
-	Sidebar        any
 	RepoURL        string
 	Org            string
 	Repo           string
@@ -33,24 +29,12 @@ func (p *Page) HandlePage(w http.ResponseWriter, r *http.Request) {
 	repoName := r.PathValue("repo")
 	repoURL := fmt.Sprintf("github.com/%s/%s", org, repoName)
 
-	if err := repoLib.ValidateURL(repoURL); err != nil {
+	if _, err := p.Queries.GetRepositoryByURL(repoURL); err != nil {
 		p.renderPage(w, pageData{
-			Sidebar: p.BuildSidebar(nil, "repo", 0),
 			RepoURL: repoURL,
 			Org:     org,
 			Repo:    repoName,
-			Error:   "Invalid repository URL format.",
-		})
-		return
-	}
-
-	if err := github.VerifyRepo(r.Context(), org, repoName); err != nil {
-		p.renderPage(w, pageData{
-			Sidebar: p.BuildSidebar(nil, "repo", 0),
-			RepoURL: repoURL,
-			Org:     org,
-			Repo:    repoName,
-			Error:   "This repository doesn't exist on GitHub or is not accessible.",
+			Error:   "Repository not found. Add it from the dashboard first.",
 		})
 		return
 	}
@@ -63,13 +47,7 @@ func (p *Page) HandlePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sidebarPRs := prs
-	if showArchived {
-		sidebarPRs, _ = p.Queries.ListPromptRequestsByRepoURL(repoURL, false)
-	}
-	sidebar := p.BuildSidebar(sidebarPRs, "repo", 0)
 	p.renderPage(w, pageData{
-		Sidebar:        sidebar,
 		RepoURL:        repoURL,
 		Org:            org,
 		Repo:           repoName,
