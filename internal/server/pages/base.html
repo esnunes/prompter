@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/static/tokens.css">
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/htmx.min.js"></script>
+  <script src="/static/idiomorph-ext.min.js"></script>
   <script src="/static/sse-ext.js"></script>
   <script src="/static/marked.min.js"></script>
   <script src="/static/purify.min.js"></script>
@@ -20,7 +21,7 @@
     </div>
   </header>
   <div class="app-layout">
-    {{template "hx/sidebar.html" .Sidebar}}
+    {{block "sidebar" .}}{{end}}
     <main class="container">
       {{block "content" .}}{{end}}
     </main>

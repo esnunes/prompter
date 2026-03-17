@@ -1,5 +1,7 @@
 {{define "title"}}{{if .PromptRequest.Title}}{{.PromptRequest.Title}}{{else}}Conversation{{end}} — Prompter{{end}}
 
+{{define "sidebar"}}{{template "hx/sidebar.html" .Sidebar}}{{end}}
+
 {{define "header-actions"}}
 <div style="display:flex;gap:var(--space-3);align-items:center;">
   <a href="/github.com/{{.Org}}/{{.Repo}}/prompt-requests" class="pr-repo">{{.PromptRequest.RepoURL}}</a>
