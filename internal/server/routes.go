@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"net/http"
 
+	"github.com/esnunes/prompter/internal/github"
 	"github.com/esnunes/prompter/internal/server/hx"
 	"github.com/esnunes/prompter/internal/server/pages/conversation"
 	"github.com/esnunes/prompter/internal/server/pages/dashboard"
@@ -24,6 +25,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) error {
 		Tmpl:         s.tmpls["dashboard"],
 		Queries:      s.queries,
 		BuildSidebar: s.buildSidebarAny,
+		VerifyRepo:   github.VerifyRepo,
 	}
 	mux.HandleFunc("GET /{$}", dashboardPage.HandlePage)
 	mux.HandleFunc("POST /hx/dashboard/create-repository", dashboardPage.HandleCreateRepository)

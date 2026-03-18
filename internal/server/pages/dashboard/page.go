@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"html/template"
 	"log"
 	"net/http"
@@ -13,6 +14,7 @@ type Page struct {
 	Tmpl         *template.Template
 	Queries      *db.Queries
 	BuildSidebar func(prs []models.PromptRequest, scope string, currentID int64) any
+	VerifyRepo   func(ctx context.Context, org, repo string) error
 }
 
 type pageData struct {

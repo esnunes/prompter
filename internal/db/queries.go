@@ -43,11 +43,10 @@ func (q *Queries) ListRepositories() ([]models.Repository, error) {
 func (q *Queries) ListRepositorySummaries() ([]models.RepositorySummary, error) {
 	rows, err := q.db.Query(`
 		SELECT r.id, r.url,
-		       COUNT(CASE WHEN pr.archived = 0 THEN 1 END) as active_pr_count,
-		       MAX(pr.updated_at) as last_activity
+		       COUNT(CASE WHEN pr.archived = 0 AND pr.status != 'deleted' THEN 1 END) as active_pr_count,
+		       COALESCE(MAX(pr.updated_at), r.created_at) as last_activity
 		FROM repositories r
-		JOIN prompt_requests pr ON pr.repository_id = r.id
-		WHERE pr.status != 'deleted'
+		LEFT JOIN prompt_requests pr ON pr.repository_id = r.id
 		GROUP BY r.id
 		ORDER BY last_activity DESC`)
 	if err != nil {

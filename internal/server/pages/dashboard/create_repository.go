@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/esnunes/prompter/internal/github"
 	"github.com/esnunes/prompter/internal/repo"
 )
 
@@ -37,11 +36,12 @@ func (p *Page) HandleCreateRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repoURL := sanitizeRepoURL(r.FormValue("repo_url"))
+	rawInput := r.FormValue("repo_url")
+	repoURL := sanitizeRepoURL(rawInput)
 
 	if err := repo.ValidateURL(repoURL); err != nil {
 		p.renderCreateRepository(w, CreateRepositoryData{
-			RepoURL: r.FormValue("repo_url"),
+			RepoURL: rawInput,
 			Error:   "Invalid repository URL. Expected format: github.com/owner/repo",
 		})
 		return
@@ -49,9 +49,9 @@ func (p *Page) HandleCreateRepository(w http.ResponseWriter, r *http.Request) {
 
 	// Extract org/repo for GitHub verification
 	parts := strings.SplitN(repoURL, "/", 3)
-	if err := github.VerifyRepo(r.Context(), parts[1], parts[2]); err != nil {
+	if err := p.VerifyRepo(r.Context(), parts[1], parts[2]); err != nil {
 		p.renderCreateRepository(w, CreateRepositoryData{
-			RepoURL: repoURL,
+			RepoURL: rawInput,
 			Error:   "This repository doesn't exist on GitHub or is not accessible.",
 		})
 		return
@@ -60,7 +60,7 @@ func (p *Page) HandleCreateRepository(w http.ResponseWriter, r *http.Request) {
 	localPath, err := repo.LocalPath(repoURL)
 	if err != nil {
 		p.renderCreateRepository(w, CreateRepositoryData{
-			RepoURL: repoURL,
+			RepoURL: rawInput,
 			Error:   "Failed to compute local path.",
 		})
 		return
@@ -68,7 +68,7 @@ func (p *Page) HandleCreateRepository(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := p.Queries.UpsertRepository(repoURL, localPath); err != nil {
 		p.renderCreateRepository(w, CreateRepositoryData{
-			RepoURL: repoURL,
+			RepoURL: rawInput,
 			Error:   "Failed to create repository.",
 		})
 		return
