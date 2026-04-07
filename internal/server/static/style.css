@@ -707,7 +707,7 @@ label {
 }
 
 .message-user .message-bubble {
-  background: linear-gradient(135deg, #1e66f5 0%, #395ced 100%);
+  background: linear-gradient(135deg, #fe640b 0%, #e55a0a 100%);
   color: #f0f2f7;
   border-bottom-right-radius: var(--radius-sm);
   box-shadow: 0 2px 8px rgba(30, 102, 245, 0.2);
